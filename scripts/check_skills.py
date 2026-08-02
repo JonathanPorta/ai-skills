@@ -69,11 +69,9 @@ def validate_python(path: Path, text: str) -> None:
 def validate_skill(skill_dir: Path) -> str:
     if skill_dir.is_symlink():
         raise ValueError(f"{skill_dir.relative_to(ROOT)} must not be a symlink")
-    if (skill_dir / "README.md").exists():
-        raise ValueError(
-            f"{(skill_dir / 'README.md').relative_to(ROOT)} is not allowed; "
-            "put collection documentation in the root README"
-        )
+    readme_file = skill_dir / "README.md"
+    if not readme_file.is_file():
+        raise ValueError(f"{readme_file.relative_to(ROOT)} is required")
     skill_file = skill_dir / "SKILL.md"
     if not skill_file.is_file():
         raise ValueError(f"{skill_file.relative_to(ROOT)} is required")

@@ -10,6 +10,7 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SKILL_DIR = ROOT / "skills" / "package-design-handoff"
 SCRIPT = ROOT / "skills" / "package-design-handoff" / "scripts" / "package_handoff.py"
 
 
@@ -99,6 +100,15 @@ class PackageHandoffTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 2)
             self.assertIn("must be greater than existing version 0.1.0", result.stderr)
+
+    def test_open_design_and_codex_installation_is_documented(self) -> None:
+        readme = (SKILL_DIR / "README.md").read_text(encoding="utf-8")
+        skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn('"$OPEN_DESIGN_REPO/skills/package-design-handoff"', readme)
+        self.assertIn('"$HOME/.agents/skills/package-design-handoff"', readme)
+        self.assertIn("No `open-design.json` or Open Design-specific", readme)
+        self.assertIn("Package a completed OpenDesign", skill)
 
 
 if __name__ == "__main__":

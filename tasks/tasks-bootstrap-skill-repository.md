@@ -10,6 +10,7 @@
 | AC-2 | Collection policy and usage are documented | 1.0 |
 | AC-3 | Canonical commands validate without third-party dependencies | 1.0 |
 | AC-4 | Packaging behavior has executable regression coverage | 1.0 |
+| AC-5 | Skill-local Open Design and Codex installation is documented and validated | 2.0 |
 
 ## Relevant Files
 
@@ -19,6 +20,7 @@
 - `scripts/check_skills.py` — Collection structure and source validator.
 - `tests/test_package_handoff.py` — End-to-end packaging regression tests.
 - `skills/package-design-handoff/` — Canonical first skill copied from the validated installed version.
+- `skills/package-design-handoff/README.md` — Skill behavior, requirements, installation, and invocation guide.
 
 ### Notes
 
@@ -37,6 +39,14 @@
     - Pre-implementation `make check` fails specifically because `skills/` or `package-design-handoff` is absent.
     - `make help` exits zero and lists `help` and `check`.
     - Post-implementation `make check` exits zero and reports one validated skill and three passing behavioral tests.
+    - `git diff --check` exits zero.
+
+- [x] 2.0 Add first-class Open Design installation guidance <!-- Serves: AC-5 -->
+  - [x] 2.1 Add a skill-local README explaining behavior, requirements, and use.
+  - [x] 2.2 Document symlink-based installation through an Open Design checkout (plus the optional `od skill add` shortcut) and Codex's `.agents/skills` discovery path.
+  - [x] 2.3 Keep strict portable Agent Skills frontmatter and validate the skill-local installation guide.
+  - **Validates when:**
+    - `make check` reports one validated skill and four passing behavioral/documentation tests.
     - `git diff --check` exits zero.
 
 ### Task 1.0 Preflight
@@ -58,9 +68,9 @@ Implementation and automated verification are complete; awaiting human review.
 |---|---|---|
 | Validation fails before implementation | PASS | `make check` exited nonzero with `skills/ is required and must contain at least one skill`. |
 | Canonical command discovery | PASS | `make help` listed `help` and `check`. |
-| Collection and behavior validation | PASS | `make check` validated one skill and ran three tests with zero failures. |
+| Collection and behavior validation | PASS | `make check` validated one skill and ran four tests with zero failures. |
 | Standard skill validation | PASS | `quick_validate.py` reported `Skill is valid!`. |
-| Canonical skill parity | PASS | Recursive diff against the installed skill produced no differences. |
+| Runtime skill parity | PASS | `SKILL.md`, OpenAI metadata, icon, and packaging helper match the installed skill; the new README is intentionally repository-local documentation. |
 | Patch hygiene | PASS | `git diff --check` exited zero. |
 
 ## Phase-Gate Audit
@@ -69,7 +79,7 @@ Implementation and automated verification are complete; awaiting human review.
 
 **Rules compliance:**
 
-- The approved `skills/<skill-name>/` layout, no-manifest decision, validation-first sequence, and Makefile command surface are implemented.
+- The approved `skills/<skill-name>/` layout, no-collection-manifest decision, skill-local documentation, Open Design support, validation-first sequence, and Makefile command surface are implemented.
 
 **Listed done but not actually done:**
 
@@ -81,7 +91,7 @@ Implementation and automated verification are complete; awaiting human review.
 
 **Done differently than documented:**
 
-- None.
+- The original no-skill-README convention was superseded by the owner's explicit request for per-skill behavior and installation documentation.
 
 **Documentation/state updates needed:**
 
@@ -89,7 +99,7 @@ Implementation and automated verification are complete; awaiting human review.
 
 **Verification performed:**
 
-- Red-first failure, `make help`, `make check`, standard skill validation, exact source comparison, and `git diff --check` all completed successfully.
+- Red-first failure, `make help`, `make check`, standard skill validation, runtime-file comparison, and `git diff --check` all completed successfully.
 
 **Recommended next action:**
 

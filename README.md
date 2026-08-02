@@ -10,12 +10,14 @@ an agent does something creative with them.
 
 ## Skills
 
-| Skill | Purpose | OpenAI ChatGPT / Codex | Other Agent Skills harnesses |
-|---|---|---|---|
-| [`package-design-handoff`](skills/package-design-handoff/) | Create immutable design-handoff ZIPs with lowercase kebab-case names, automatic SemVer increments, manifests, checksums, and validation. | Verified | Format-compatible; not yet verified |
+| Skill | Purpose | Open Design | OpenAI ChatGPT / Codex | Other Agent Skills harnesses |
+|---|---|---|---|---|
+| [`package-design-handoff`](skills/package-design-handoff/) | Create immutable design-handoff ZIPs with lowercase kebab-case names, automatic SemVer increments, manifests, checksums, and validation. | Native skill; install documented | Verified | Format-compatible; not yet verified |
 
 Compatibility labels are intentionally conservative:
 
+- **Native** means the harness reads the shared `SKILL.md` folder directly and
+  the repository documents its discovery path.
 - **Verified** means the skill and its executable behavior have been tested with
   the named harness family.
 - **Format-compatible** means the directory follows the open Agent Skills layout,
@@ -32,6 +34,7 @@ ai-skills/
 ├── skills/
 │   └── package-design-handoff/
 │       ├── SKILL.md
+│       ├── README.md
 │       ├── agents/
 │       │   └── openai.yaml
 │       ├── assets/
@@ -44,7 +47,8 @@ ai-skills/
 ```
 
 Every direct child of `skills/` is independently installable. Its directory name
-must exactly match the `name` in `SKILL.md`.
+must exactly match the `name` in `SKILL.md`. Its README explains that skill's
+behavior, requirements, harness-specific installation, and invocation.
 
 ## Install a skill
 
@@ -61,7 +65,10 @@ npx skills add . --skill package-design-handoff
 ```
 
 Using a local checkout keeps private-repository authentication in Git and avoids
-putting credentials in an installer command.
+putting credentials in an installer command. Prefer symlinking each skill from
+that checkout so pulls update every installed harness in place. See the
+[`package-design-handoff` installation guide](skills/package-design-handoff/README.md)
+for Open Design and Codex commands.
 
 ## Why there is no package manifest
 
@@ -72,6 +79,8 @@ duplicate information and commit this collection to an unsettled convention.
   per-skill manifest and discovery surface.
 - `agents/openai.yaml` carries OpenAI-specific interface metadata without
   changing the portable skill instructions.
+- Open Design reads the portable `SKILL.md` directly, so local installation
+  does not require an additional sidecar manifest.
 - Git records collection history and reviewable changes.
 - Runtime dependencies belong with the script or ecosystem that needs them.
   The current packaging helper uses only Python's standard library.
@@ -87,15 +96,14 @@ useful—not because an empty config file feels lonely.
 1. Create `skills/<skill-name>/`; use lowercase letters, digits, and hyphens.
 2. Add `SKILL.md` with `name` and `description` frontmatter plus concise,
    imperative instructions.
-3. Add only resources the skill needs: `scripts/`, `references/`, `assets/`, or
+3. Add a concise skill-local README covering purpose, requirements,
+   harness-specific installation, and invocation.
+4. Add only resources the skill needs: `scripts/`, `references/`, `assets/`, or
    harness metadata under `agents/`.
-4. Add or update repository-level behavioral tests when the skill includes
+5. Add or update repository-level behavioral tests when the skill includes
    executable logic.
-5. Update the catalog and compatibility table above.
-6. Run `make check` before opening a pull request.
-
-Do not add a README inside an individual skill. Human-facing collection guidance
-belongs here; runtime instructions belong in `SKILL.md`.
+6. Update the catalog and compatibility table above.
+7. Run `make check` before opening a pull request.
 
 ## Validation
 
@@ -104,10 +112,10 @@ make help
 make check
 ```
 
-`make check` validates naming, required metadata, UTF-8 and hidden-Unicode safety,
-Python syntax, OpenAI interface metadata when present, and repository-level
-behavioral tests. It requires GNU Make and Python 3.10 or newer, with no
-third-party Python packages.
+`make check` validates naming, required skill-local documentation and metadata,
+UTF-8 and hidden-Unicode safety, Python syntax, OpenAI interface metadata when
+present, and repository-level behavioral tests. It requires GNU Make and Python
+3.10 or newer, with no third-party Python packages.
 
 ## Security
 
