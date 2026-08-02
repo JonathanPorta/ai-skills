@@ -85,7 +85,7 @@ Implementation and automated verification are complete; awaiting human review.
 
 **Documentation/state updates needed:**
 
-- Remove the active session-state file after human verification, before merge.
+- None. The active session-state file is a local working artifact and is not part of this branch.
 
 **Verification performed:**
 
@@ -93,4 +93,4 @@ Implementation and automated verification are complete; awaiting human review.
 
 **Recommended next action:**
 
-- Review the pull request, make the repository private if still intended, and remove the session-state file before merge.
+- Review the pull request and make the repository private if still intended.
