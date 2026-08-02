@@ -12,6 +12,7 @@ import re
 import stat
 import sys
 from typing import Any
+import unicodedata
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +44,10 @@ TEXT_SUFFIXES = {
     ".yaml",
     ".yml",
 }
+# Prose can legitimately need language-shaping controls. High-risk code points
+# are still rejected everywhere; executable, script, code, and machine-readable
+# resources reject the complete Unicode Cf category.
+FORMAT_CONTROL_ALLOWED_PROSE_SUFFIXES = {".md", ".txt"}
 BINARY_ASSET_SUFFIXES = {
     ".avif",
     ".fig",
@@ -466,12 +471,16 @@ def validate_openai_schema(value: Any, skill_dir: Path, metadata_file: Path) -> 
                     raise ValueError(f"{relative} dependencies.tools[{index}].{key} must be a string")
 
 
-def validate_text_safety(path: Path, text: str) -> None:
+def validate_text_safety(path: Path, text: str, reject_format_controls: bool) -> None:
     for offset, character in enumerate(text):
-        if ord(character) not in SUSPICIOUS_CODEPOINTS:
+        codepoint = ord(character)
+        hidden_format_control = (
+            reject_format_controls and unicodedata.category(character) == "Cf"
+        )
+        if codepoint not in SUSPICIOUS_CODEPOINTS and not hidden_format_control:
             continue
         line = text.count("\n", 0, offset) + 1
-        raise ValueError(f"{label(path)}:{line} contains hidden Unicode U+{ord(character):04X}")
+        raise ValueError(f"{label(path)}:{line} contains hidden Unicode U+{codepoint:04X}")
 
 
 def validate_python(path: Path, text: str) -> None:
@@ -501,8 +510,16 @@ def inspect_resource(path: Path, skill_dir: Path) -> None:
         raise ValueError(f"{label(path)} is not valid UTF-8") from error
     if text.startswith("\ufeff"):
         raise ValueError(f"{label(path)} starts with a UTF-8 BOM")
-    validate_text_safety(path, text)
     suffix = path.suffix.casefold()
+    validate_text_safety(
+        path,
+        text,
+        reject_format_controls=(
+            executable
+            or relative_to_skill.parts[0] == "scripts"
+            or suffix not in FORMAT_CONTROL_ALLOWED_PROSE_SUFFIXES
+        ),
+    )
     if suffix == ".py":
         validate_python(path, text)
     elif suffix == ".json":

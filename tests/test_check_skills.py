@@ -111,17 +111,49 @@ class SkillValidatorTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("relative asset path", result.stderr)
 
-    def test_extensionless_executable_is_scanned_for_hidden_unicode(self) -> None:
+    def test_executable_and_code_resources_reject_hidden_format_controls(self) -> None:
+        controls = (
+            ("run-bidi", "\u202e", True),
+            ("run-word-joiner", "\u2060", True),
+            ("soft-hyphen.py", "\u00ad", False),
+            ("library.rs", "\u2060", False),
+        )
+        for filename, control, executable_bit in controls:
+            with self.subTest(filename=filename, codepoint=f"U+{ord(control):04X}"):
+                with tempfile.TemporaryDirectory() as temporary:
+                    repository, skill = self.make_repository(Path(temporary))
+                    resource = skill / "scripts" / filename
+                    if resource.suffix == ".py":
+                        contents = f"print('safe')\n# hidden{control}\n"
+                    else:
+                        contents = f"#!/bin/sh\nprintf 'safe'{control}\n"
+                    resource.write_text(contents, encoding="utf-8")
+                    if executable_bit:
+                        resource.chmod(0o755)
+
+                    result = self.validate(repository)
+
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"U+{ord(control):04X}", result.stderr)
+                    self.assertIn("hidden Unicode", result.stderr)
+
+    def test_executable_and_code_resources_allow_ordinary_unicode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             repository, skill = self.make_repository(Path(temporary))
             executable = skill / "scripts" / "run"
-            executable.write_text("#!/bin/sh\nprintf 'safe'\u202e\n", encoding="utf-8")
+            executable.write_text(
+                "#!/bin/sh\nprintf 'café 日本語'\n",
+                encoding="utf-8",
+            )
             executable.chmod(0o755)
+            (skill / "scripts" / "message.py").write_text(
+                "print('Привет, κόσμε')\n",
+                encoding="utf-8",
+            )
 
             result = self.validate(repository)
 
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("hidden Unicode", result.stderr)
+            self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ IGNORE_CONTROL_FILE = ".opendesign-handoffignore"
 EXCLUDED_DIR_NAMES = {
     ".git",
     ".hg",
+    ".od-skills",
     ".svn",
     ".mypy_cache",
     ".pytest_cache",
@@ -44,12 +45,35 @@ EXCLUDED_DIR_NAMES = {
 EXCLUDED_FILE_NAMES = {".DS_Store", "Thumbs.db"}
 SENSITIVE_EXACT_NAMES = {
     ".env",
+    ".git-credentials",
+    ".netrc",
+    ".npmrc",
+    ".pnpmrc",
+    ".pypirc",
+    ".yarnrc",
+    "_netrc",
+    "application_default_credentials.json",
+    "auth.json",
+    "client_secret.json",
+    "credentials",
+    "credentials.json",
     "id_dsa",
     "id_ecdsa",
     "id_ed25519",
     "id_rsa",
+    "secrets.json",
 }
 SENSITIVE_SUFFIXES = (".key", ".p12", ".pfx", ".pem")
+SENSITIVE_PATH_SUFFIXES = {
+    (".aws", "credentials"),
+    (".cargo", "credentials"),
+    (".cargo", "credentials.toml"),
+    (".config", "gcloud", "application_default_credentials.json"),
+    (".config", "gh", "hosts.yml"),
+    (".docker", "config.json"),
+    (".gem", "credentials"),
+    (".kube", "config"),
+}
 WINDOWS_RESERVED_COMPONENTS = {
     "aux",
     "clock$",
@@ -203,11 +227,26 @@ def exact_exclusion_paths(patterns: list[str]) -> set[str]:
 
 
 def credential_like_path(relative_path: str) -> bool:
-    name = PurePosixPath(relative_path).name.casefold()
+    path = PurePosixPath(relative_path)
+    parts = tuple(part.casefold() for part in path.parts)
+    name = parts[-1]
+    normalized_name = name.replace("_", "-")
     return (
         name in SENSITIVE_EXACT_NAMES
         or name.startswith(".env.")
+        or name.startswith((".npmrc.", ".pypirc."))
         or name.endswith(SENSITIVE_SUFFIXES)
+        or any(
+            len(parts) >= len(suffix) and parts[-len(suffix) :] == suffix
+            for suffix in SENSITIVE_PATH_SUFFIXES
+        )
+        or (
+            name.endswith(".json")
+            and any(
+                marker in normalized_name
+                for marker in ("client-secret", "credentials", "service-account")
+            )
+        )
         or "private-key" in name
         or "private_key" in name
         or "signing-key" in name
@@ -374,14 +413,27 @@ def inventory_payload(
 def portable_archive_key(name: str) -> str:
     if not name or name.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", name):
         raise ValueError(f"ZIP entry is absolute or drive-qualified: '{name}'")
+    if "\\" in name:
+        raise ValueError(f"ZIP entry uses a non-portable backslash separator: '{name}'")
     if any(ord(character) < 32 or ord(character) == 127 for character in name):
         raise ValueError(f"ZIP entry contains a control character: '{name}'")
-    normalized_separators = name.replace("\\", "/")
-    parts = normalized_separators.split("/")
+    parts = name.split("/")
     if any(part in {"", ".", ".."} for part in parts):
         raise ValueError(f"ZIP entry contains an empty or traversal component: '{name}'")
+    normalized_parts: list[str] = []
     for component in parts:
         normalized_component = unicodedata.normalize("NFKC", component)
+        if "/" in normalized_component or "\\" in normalized_component:
+            raise ValueError(
+                f"ZIP entry normalization introduces a path separator: '{name}'"
+            )
+        if normalized_component in {"", ".", ".."}:
+            raise ValueError(f"ZIP entry normalizes to a traversal component: '{name}'")
+        if any(
+            ord(character) < 32 or ord(character) == 127
+            for character in normalized_component
+        ):
+            raise ValueError(f"ZIP entry normalizes to a control character: '{name}'")
         if normalized_component.endswith((" ", ".")):
             raise ValueError(f"ZIP entry has a Windows-ambiguous component: '{name}'")
         basename = normalized_component.split(".", 1)[0].casefold()
@@ -389,7 +441,11 @@ def portable_archive_key(name: str) -> str:
             raise ValueError(f"ZIP entry uses a Windows-reserved component: '{name}'")
         if any(character in '<>:"|?*' for character in normalized_component):
             raise ValueError(f"ZIP entry contains a Windows-invalid character: '{name}'")
-    return unicodedata.normalize("NFKC", normalized_separators).casefold()
+        normalized_parts.append(normalized_component)
+    normalized_name = "/".join(normalized_parts)
+    if normalized_name.startswith("/") or re.match(r"^[A-Za-z]:", normalized_name):
+        raise ValueError(f"ZIP entry normalizes to an absolute or drive-qualified path: '{name}'")
+    return normalized_name.casefold()
 
 
 def validate_portable_namespace(names: list[str]) -> None:
@@ -402,9 +458,6 @@ def validate_portable_namespace(names: list[str]) -> None:
                 f"portable ZIP namespace collision: '{previous}' and '{name}'"
             )
         by_key[key] = name
-    for name in names:
-        if "\\" in name:
-            raise ValueError(f"ZIP entry uses a non-portable backslash separator: '{name}'")
 
 
 def zip_info(name: str, mode: int = 0o644) -> zipfile.ZipInfo:

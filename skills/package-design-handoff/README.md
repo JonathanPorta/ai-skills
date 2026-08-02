@@ -50,11 +50,11 @@ ln -s "$AI_SKILLS_REPO/skills/package-design-handoff" \
   "$OPEN_DESIGN_REPO/skills/package-design-handoff"
 ```
 
-The shared `SKILL.md` uses strict standard Agent Skills frontmatter. Its trigger
-and workflow prose are contract-tested against the pinned Open Design inference
-logic so the utility resolves to the non-image `prototype` path. Ask Open Design
-to "package this project for handoff" or select `package-design-handoff` from
-its skills UI.
+The shared `SKILL.md` uses strict standard Agent Skills frontmatter. The pinned
+integration runs Open Design's production discovery and staging functions,
+confirms the utility resolves to the non-image `prototype` path, and invokes the
+packager through the staged skill copy. Ask Open Design to "package this project
+for handoff" or select `package-design-handoff` from its skills UI.
 
 Restart the Open Design daemon after adding the symlink. Do not run the command
 if the destination already contains a real directory you need to keep.

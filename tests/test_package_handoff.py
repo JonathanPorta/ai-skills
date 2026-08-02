@@ -89,13 +89,23 @@ class PackageHandoffTests(unittest.TestCase):
     def test_credential_like_files_fail_closed_without_exact_review(self) -> None:
         sensitive_files = {
             ".env": "TOKEN=do-not-ship\n",
+            ".npmrc": "//registry.npmjs.org/:_authToken=do-not-ship\n",
+            ".pypirc": "[pypi]\npassword = do-not-ship\n",
+            ".netrc": "machine example.test password do-not-ship\n",
+            ".git-credentials": "https://user:do-not-ship@example.test\n",
+            ".aws/credentials": "[default]\naws_secret_access_key=do-not-ship\n",
+            ".docker/config.json": '{"auths":{"example.test":{"auth":"do-not-ship"}}}\n',
+            "service-account.json": '{"type":"service_account","private_key":"do-not-ship"}\n',
+            "config/credentials.json": '{"token":"do-not-ship"}\n',
             "signing-key.pem": "-----BEGIN PRIVATE KEY-----\nsecret\n",
         }
         for relative_path, contents in sensitive_files.items():
             with self.subTest(relative_path=relative_path):
                 with tempfile.TemporaryDirectory() as temporary:
                     project = self.make_project(Path(temporary))
-                    (project / relative_path).write_text(contents, encoding="utf-8")
+                    sensitive = project / relative_path
+                    sensitive.parent.mkdir(parents=True, exist_ok=True)
+                    sensitive.write_text(contents, encoding="utf-8")
 
                     result = self.run_packager(project, expect_success=False)
 
@@ -106,32 +116,56 @@ class PackageHandoffTests(unittest.TestCase):
     def test_sensitive_file_requires_exact_exclusion_or_inclusion(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             project = self.make_project(Path(temporary))
-            (project / ".env").write_text("PUBLIC_EXAMPLE=true\n", encoding="utf-8")
+            (project / ".npmrc").write_text("registry=https://example.test\n", encoding="utf-8")
 
-            self.run_packager(project, "--exclude", ".env")
+            self.run_packager(project, "--exclude", ".npmrc")
 
             with zipfile.ZipFile(project / "sample-design-0.1.0.zip") as archive:
-                self.assertNotIn(".env", archive.namelist())
+                self.assertNotIn(".npmrc", archive.namelist())
 
         with tempfile.TemporaryDirectory() as temporary:
             project = self.make_project(Path(temporary))
-            (project / "docs").mkdir()
-            reviewed = project / "docs" / "example-signing-key.pem"
-            reviewed.write_text("public training fixture\n", encoding="utf-8")
+            (project / "config").mkdir()
+            reviewed = project / "config" / "credentials.json"
+            reviewed.write_text('{"token":"public training fixture"}\n', encoding="utf-8")
 
             self.run_packager(
                 project,
                 "--include-sensitive",
-                "docs/example-signing-key.pem",
+                "config/credentials.json",
             )
 
             with zipfile.ZipFile(project / "sample-design-0.1.0.zip") as archive:
-                self.assertIn("docs/example-signing-key.pem", archive.namelist())
+                self.assertIn("config/credentials.json", archive.namelist())
                 manifest = json.loads(archive.read("_handoff/MANIFEST.json"))
                 self.assertEqual(
                     manifest["reviewed_sensitive_inclusions"],
-                    ["docs/example-signing-key.pem"],
+                    ["config/credentials.json"],
                 )
+
+    def test_sensitive_file_globs_do_not_count_as_exact_review(self) -> None:
+        controls = (
+            ("--exclude", "*.npmrc"),
+            ("--include-sensitive", "*.npmrc"),
+        )
+        for option, value in controls:
+            with self.subTest(option=option):
+                with tempfile.TemporaryDirectory() as temporary:
+                    project = self.make_project(Path(temporary))
+                    (project / ".npmrc").write_text(
+                        "//registry.npmjs.org/:_authToken=do-not-ship\n",
+                        encoding="utf-8",
+                    )
+
+                    result = self.run_packager(
+                        project,
+                        option,
+                        value,
+                        expect_success=False,
+                    )
+
+                    self.assertEqual(result.returncode, 2)
+                    self.assertFalse((project / "sample-design-0.1.0.zip").exists())
 
     def test_ignore_control_file_must_be_an_in_project_regular_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -173,8 +207,56 @@ class PackageHandoffTests(unittest.TestCase):
             result = self.run_packager(project, expect_success=False)
 
             self.assertEqual(result.returncode, 2)
-            self.assertIn("portable ZIP namespace collision", result.stderr)
+            self.assertIn("backslash separator", result.stderr)
             self.assertFalse((project / "sample-design-0.1.0.zip").exists())
+
+    def test_portable_namespace_rejects_separators_introduced_by_nfkc(self) -> None:
+        controls = (
+            (["docs\uff0ffile.txt"], "normalization introduces a path separator"),
+            (
+                ["docs/file.txt", "docs\uff0ffile.txt"],
+                "normalization introduces a path separator",
+            ),
+            (["docs\uff3cfile.txt"], "normalization introduces a path separator"),
+            (
+                ["docs/file.txt", "docs\uff3cfile.txt"],
+                "normalization introduces a path separator",
+            ),
+        )
+        for names, message in controls:
+            with self.subTest(names=names):
+                with self.assertRaisesRegex(ValueError, message):
+                    PACKAGE.validate_portable_namespace(names)
+
+        for separator in ("\uff0f", "\uff3c"):
+            with self.subTest(black_box_separator=f"U+{ord(separator):04X}"):
+                with tempfile.TemporaryDirectory() as temporary:
+                    project = self.make_project(Path(temporary))
+                    (project / f"docs{separator}file.txt").write_text(
+                        "ambiguous path\n",
+                        encoding="utf-8",
+                    )
+
+                    result = self.run_packager(project, expect_success=False)
+
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn("normalization introduces a path separator", result.stderr)
+                    self.assertFalse((project / "sample-design-0.1.0.zip").exists())
+
+    def test_portable_namespace_allows_ordinary_unicode_names(self) -> None:
+        PACKAGE.validate_portable_namespace(
+            ["docs/élan-日本語.txt", "assets/überblick-Δ.svg"]
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            project = self.make_project(Path(temporary))
+            unicode_file = project / "assets" / "élan-日本語.txt"
+            unicode_file.write_text("ordinary Unicode\n", encoding="utf-8")
+
+            self.run_packager(project)
+
+            with zipfile.ZipFile(project / "sample-design-0.1.0.zip") as archive:
+                self.assertIn("assets/élan-日本語.txt", archive.namelist())
 
     def test_portable_namespace_rejects_case_unicode_reserved_and_traversal_names(self) -> None:
         controls = (

@@ -10,10 +10,10 @@
 | AC-2 | Collection policy and usage are documented | 1.0 |
 | AC-3 | Canonical commands validate without third-party dependencies | 1.0 |
 | AC-4 | Packaging behavior has executable regression coverage | 1.0 |
-| AC-5 | Skill-local Open Design and Codex installation is documented and validated | 2.0 |
-| AC-6 | Credential and portable-namespace boundaries fail closed | 3.0 |
+| AC-5 | Skill-local Open Design and Codex installation is documented and validated | 2.0, 4.0 |
+| AC-6 | Credential and portable-namespace boundaries fail closed | 3.0, 4.0 |
 | AC-7 | Private validation and atomic no-clobber publication are race-safe | 3.0 |
-| AC-8 | YAML schemas and every executable/text resource are validated | 3.0 |
+| AC-8 | YAML schemas and every executable/text resource are validated | 3.0, 4.0 |
 
 ## Relevant Files
 
@@ -67,6 +67,45 @@
     - `make integration-open-design OPEN_DESIGN_REPO=<pinned-checkout>` proves explicit non-image discovery and emits a valid ZIP.
     - Workflow action references and the Open Design checkout use full commit SHAs.
 
+- [x] 4.0 Close pull-request re-review gaps <!-- Serves: AC-5, AC-6, AC-8 -->
+  - [x] 4.1 Add fail-closed coverage for package-manager, VCS, cloud/service-account, and generic credential files, plus exact include/exclude controls.
+  - [x] 4.2 Reject forward and reverse path separators introduced by Unicode normalization while preserving ordinary Unicode filenames.
+  - [x] 4.3 Reject all Unicode format controls in executable and code resources, including U+2060 and U+00AD, while preserving documented Unicode text.
+  - [x] 4.4 Exercise pinned Open Design's production skill discovery and staging functions, then invoke the packager through the discovered/staged skill path.
+  - **Validates when:**
+    - New negative controls fail before implementation for each reported bypass.
+    - `make check` passes the full repository suite after implementation.
+    - `make integration-open-design OPEN_DESIGN_REPO=<pinned-checkout>` uses production `listSkills`, `findSkillById`, and `stageActiveSkill`, reports `package-design-handoff` in `prototype` mode, and emits a ZIP through that staged skill.
+    - `git diff --check` exits zero.
+
+### Task 4.0 Preflight
+
+- Validation plan written: yes
+- Validation plan saved in artifact: yes
+- Validation review mode recorded in the durable task artifact: auto-proceed, per the owner's request to take further action on the PR review.
+- Make targets or equivalent command surface identified: yes (`make test`, `make check`, `make integration-open-design`)
+- Acceptance criteria served by this task listed: yes (AC-5, AC-6, AC-8)
+- Relevant files re-read before modification: yes
+
+**Pre-implementation validation plan:**
+
+1. Add table-driven tests for the exact credential classes, normalization-introduced separators, and hidden format controls named by the reviewer; run `make test` and confirm the new controls fail for those missing protections.
+2. Replace the copied Open Design mode regex with a TypeScript harness that imports the pinned production discovery and staging functions; confirm the old integration cannot satisfy the new assertions.
+3. Implement the narrow fail-closed changes, provision the pinned Open Design test dependency through the workflow, and run `make check` plus the pinned integration target.
+4. Inspect the final patch with `git diff --check` and reconcile every remaining review finding against observable test evidence.
+
+### Task 4.0 Validation Results
+
+| Check | Result | Evidence |
+|---|---|---|
+| Reported bypasses fail before implementation | PASS | `make test` produced the expected failures for `.npmrc` and sibling credential classes, U+FF0F/U+FF3C separators, U+2060/U+00AD format controls, and exact-review controls. |
+| Credential classes and exact review | PASS | Table-driven black-box tests cover package-manager, VCS, cloud/service-account, and generic stores; wildcard review remains rejected while exact exclusion and inclusion pass. |
+| Portable namespace after normalization | PASS | Standalone, paired, and black-box U+FF0F/U+FF3C controls fail; ordinary accented, Greek, and Japanese filenames package successfully. |
+| Hidden format controls | PASS | Executable, extensionless script, Python, and additional code-resource controls reject Unicode category `Cf`; documented ordinary Unicode remains valid. |
+| Open Design production path | PASS | Pinned commit `517f39acde402c1a7af2189167a8d6957a3dac71` runs production `listSkills`, `findSkillById`, and `stageActiveSkill`, discovers `prototype` mode, and emits the ZIP through the staged copy. |
+| Full repository validation | PASS | `make check` validates one skill and passes all 23 test methods (the external integration is intentionally skipped there and run by its dedicated target). |
+| Patch hygiene and action pins | PASS | `git diff --check` exits zero and every workflow action reference is a full 40-character commit SHA. |
+
 ### Task 1.0 Preflight
 
 - Validation plan written: yes
@@ -78,9 +117,9 @@
 
 ## Current Status
 
-Implementation and automated verification are complete; owner acceptance is
-awaiting pull-request approval. No task checkbox is being used as a substitute
-for that owner decision.
+Implementation and automated verification, including the re-review fixes, are
+complete locally; owner acceptance remains tied to pull-request approval. No
+task checkbox is being used as a substitute for that owner decision.
 
 ## Validation Results
 
@@ -90,8 +129,8 @@ for that owner decision.
 | Canonical command discovery | PASS | `make help` lists `help`, `test`, `check`, and `integration-open-design`. |
 | Collection and behavior validation | PASS | `make check` validates one skill and runs the behavioral/security suite. |
 | Standard skill validation | PASS | `quick_validate.py` reported `Skill is valid!`. |
-| Open Design contract | PASS | Exact commit `517f39acde402c1a7af2189167a8d6957a3dac71` infers the strict skill as prototype rather than media work, and the integration emits a ZIP. |
-| Security and publication controls | PASS | Credential, symlink, namespace, private-validation, competing-destination, and no-partial-fallback regressions pass. |
+| Open Design contract | PASS | Exact commit `517f39acde402c1a7af2189167a8d6957a3dac71` discovers and stages the strict skill through production functions as `prototype`, then the staged helper emits a ZIP. |
+| Security and publication controls | PASS | Credential-class, exact-review, Unicode separator, hidden-format-control, symlink, namespace, private-validation, competing-destination, and no-partial-fallback regressions pass. |
 | Patch hygiene | PASS | `git diff --check` exited zero. |
 
 ## Phase-Gate Audit
@@ -114,15 +153,15 @@ for that owner decision.
 **Done differently than documented:**
 
 - The original no-skill-README convention was superseded by the owner's explicit request for per-skill behavior and installation documentation.
-- Open Design support stays strict-Agent-Skills-compatible; the pinned integration test guards the media-neutral prose that makes inference resolve to prototype.
+- Open Design support stays strict-Agent-Skills-compatible; the pinned integration now exercises production discovery and staging instead of duplicating mode inference.
 
 **Documentation/state updates needed:**
 
-- This task artifact is the durable lifecycle record; it intentionally distinguishes implementation evidence from owner acceptance.
+- No documentation or state update remains for the implemented re-review scope; this task artifact intentionally distinguishes implementation evidence from owner acceptance.
 
 **Verification performed:**
 
-- Red-first security failures, `make help`, `make test`, `make check`, pinned Open Design integration, action-pin inspection, and `git diff --check` all completed successfully.
+- Red-first review controls, `make help`, `make test`, `make check`, pinned production Open Design integration, action-pin inspection, and `git diff --check` all completed successfully.
 
 **Recommended next action:**
 
