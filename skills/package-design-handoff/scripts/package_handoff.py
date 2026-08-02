@@ -25,9 +25,7 @@ METADATA_README = f"{METADATA_DIR}/README.md"
 METADATA_MANIFEST = f"{METADATA_DIR}/MANIFEST.json"
 METADATA_CHECKSUMS = f"{METADATA_DIR}/CHECKSUMS.sha256"
 RESERVED_NAMES = {METADATA_README, METADATA_MANIFEST, METADATA_CHECKSUMS}
-HANDOFF_ARCHIVE_PATTERN = re.compile(
-    r"^.+-(?:v)?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.zip$"
-)
+IGNORE_CONTROL_FILE = ".opendesign-handoffignore"
 
 EXCLUDED_DIR_NAMES = {
     ".git",
@@ -36,10 +34,31 @@ EXCLUDED_DIR_NAMES = {
     ".mypy_cache",
     ".pytest_cache",
     ".ruff_cache",
+    ".tox",
+    ".venv",
+    "env",
+    "venv",
     "__pycache__",
     "node_modules",
 }
 EXCLUDED_FILE_NAMES = {".DS_Store", "Thumbs.db"}
+SENSITIVE_EXACT_NAMES = {
+    ".env",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "id_rsa",
+}
+SENSITIVE_SUFFIXES = (".key", ".p12", ".pfx", ".pem")
+WINDOWS_RESERVED_COMPONENTS = {
+    "aux",
+    "clock$",
+    "con",
+    "nul",
+    "prn",
+    *(f"com{number}" for number in range(1, 10)),
+    *(f"lpt{number}" for number in range(1, 10)),
+}
 
 
 @dataclass(frozen=True, order=True)
@@ -70,6 +89,7 @@ class Version:
 
 @dataclass(frozen=True)
 class PayloadFile:
+    source_root: Path
     absolute_path: Path
     archive_path: str
     size: int
@@ -99,15 +119,100 @@ def hash_file(path: Path) -> str:
         return hash_stream(handle)
 
 
+def open_project_file(source: Path, relative_path: str):
+    """Open a project file without following a symlink in any path component."""
+    parts = PurePosixPath(relative_path).parts
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise ValueError(f"invalid project-relative path '{relative_path}'")
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    descriptors: list[int] = []
+    try:
+        current = os.open(source, directory_flags)
+        descriptors.append(current)
+        for part in parts[:-1]:
+            current = os.open(part, directory_flags | no_follow, dir_fd=current)
+            descriptors.append(current)
+        file_descriptor = os.open(parts[-1], os.O_RDONLY | no_follow, dir_fd=current)
+        file_stat = os.fstat(file_descriptor)
+        if not stat.S_ISREG(file_stat.st_mode):
+            os.close(file_descriptor)
+            raise ValueError(f"unsupported non-regular file '{relative_path}'")
+        return os.fdopen(file_descriptor, "rb")
+    except OSError as error:
+        if error.errno in {getattr(os, "ELOOP", 40), 40}:
+            raise ValueError(f"project path contains a symlink: '{relative_path}'") from error
+        raise
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def hash_project_file(source: Path, relative_path: str) -> tuple[str, os.stat_result]:
+    with open_project_file(source, relative_path) as handle:
+        file_stat = os.fstat(handle.fileno())
+        return hash_stream(handle), file_stat
+
+
 def load_ignore_patterns(source: Path, cli_patterns: list[str]) -> list[str]:
     patterns = list(cli_patterns)
-    ignore_file = source / ".opendesign-handoffignore"
-    if ignore_file.is_file():
-        for raw_line in ignore_file.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if line and not line.startswith("#"):
-                patterns.append(line)
+    ignore_file = source / IGNORE_CONTROL_FILE
+    try:
+        ignore_stat = ignore_file.lstat()
+    except FileNotFoundError:
+        return patterns
+    if stat.S_ISLNK(ignore_stat.st_mode) or not stat.S_ISREG(ignore_stat.st_mode):
+        raise ValueError(
+            f"ignore control file '{IGNORE_CONTROL_FILE}' must be an in-project regular file, not a symlink"
+        )
+    try:
+        with open_project_file(source, IGNORE_CONTROL_FILE) as handle:
+            ignore_text = handle.read().decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError(f"ignore control file '{IGNORE_CONTROL_FILE}' must be UTF-8") from error
+    for raw_line in ignore_text.splitlines():
+        line = raw_line.strip()
+        if line and not line.startswith("#"):
+            patterns.append(line)
     return patterns
+
+
+def normalize_exact_review_path(value: str) -> str:
+    candidate = value.strip().replace("\\", "/")
+    if candidate.startswith("/") or re.match(r"^[A-Za-z]:", candidate):
+        raise ValueError(f"reviewed sensitive path must stay inside the project: '{value}'")
+    if not candidate or any(character in candidate for character in "*?["):
+        raise ValueError(f"reviewed sensitive path must be exact, not a glob: '{value}'")
+    path = PurePosixPath(candidate)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError(f"reviewed sensitive path must stay inside the project: '{value}'")
+    return path.as_posix()
+
+
+def exact_exclusion_paths(patterns: list[str]) -> set[str]:
+    exact: set[str] = set()
+    for pattern in patterns:
+        candidate = pattern.strip()
+        if candidate.endswith("/") or any(character in candidate for character in "*?["):
+            continue
+        try:
+            exact.add(normalize_exact_review_path(candidate.lstrip("/")))
+        except ValueError:
+            continue
+    return exact
+
+
+def credential_like_path(relative_path: str) -> bool:
+    name = PurePosixPath(relative_path).name.casefold()
+    return (
+        name in SENSITIVE_EXACT_NAMES
+        or name.startswith(".env.")
+        or name.endswith(SENSITIVE_SUFFIXES)
+        or "private-key" in name
+        or "private_key" in name
+        or "signing-key" in name
+        or "signing_key" in name
+    )
 
 
 def matches_pattern(relative_path: str, pattern: str) -> bool:
@@ -168,9 +273,17 @@ def select_version(
 
 
 def inventory_payload(
-    source: Path, slug: str, ignore_patterns: list[str]
+    source: Path,
+    slug: str,
+    ignore_patterns: list[str],
+    reviewed_sensitive_inclusions: list[str] | None = None,
 ) -> tuple[list[PayloadFile], list[str]]:
     archive_pattern = version_pattern(slug)
+    exact_exclusions = exact_exclusion_paths(ignore_patterns)
+    reviewed_inclusions = {
+        normalize_exact_review_path(path) for path in (reviewed_sensitive_inclusions or [])
+    }
+    found_reviewed_inclusions: set[str] = set()
     payload: list[PayloadFile] = []
     automatically_excluded: list[str] = []
     unresolved_links: list[str] = []
@@ -196,11 +309,26 @@ def inventory_payload(
         for name in sorted(file_names):
             path = current / name
             relative = path.relative_to(source).as_posix()
+            reviewed_sensitive = False
+            if relative == IGNORE_CONTROL_FILE:
+                automatically_excluded.append(relative)
+                continue
+            if credential_like_path(relative):
+                if relative in reviewed_inclusions:
+                    found_reviewed_inclusions.add(relative)
+                    reviewed_sensitive = True
+                elif relative in exact_exclusions:
+                    automatically_excluded.append(relative)
+                    continue
+                else:
+                    raise ValueError(
+                        f"credential-like file '{relative}' requires an exact --exclude path "
+                        "or an exact --include-sensitive review"
+                    )
             if (
                 name in EXCLUDED_FILE_NAMES
                 or archive_pattern.fullmatch(name)
-                or (current == source and HANDOFF_ARCHIVE_PATTERN.fullmatch(name))
-                or excluded(relative, ignore_patterns)
+                or (excluded(relative, ignore_patterns) and not reviewed_sensitive)
             ):
                 automatically_excluded.append(relative)
                 continue
@@ -211,15 +339,14 @@ def inventory_payload(
             if path.is_symlink():
                 unresolved_links.append(relative)
                 continue
-            file_stat = path.stat()
-            if not stat.S_ISREG(file_stat.st_mode):
-                raise ValueError(f"unsupported non-regular file '{relative}'")
+            digest, file_stat = hash_project_file(source, relative)
             payload.append(
                 PayloadFile(
+                    source_root=source,
                     absolute_path=path,
                     archive_path=relative,
                     size=file_stat.st_size,
-                    sha256=hash_file(path),
+                    sha256=digest,
                     mode=stat.S_IMODE(file_stat.st_mode),
                 )
             )
@@ -231,10 +358,53 @@ def inventory_payload(
             f"unresolved symlinks would make the handoff ambiguous: {listed}{suffix}; "
             "replace them with files or intentionally exclude them"
         )
+    missing_reviews = reviewed_inclusions - found_reviewed_inclusions
+    if missing_reviews:
+        raise ValueError(
+            "reviewed sensitive inclusion does not name a credential-like regular file: "
+            + ", ".join(sorted(missing_reviews))
+        )
     payload.sort(key=lambda item: item.archive_path)
     if not payload:
         raise ValueError("project contains no payload files after exclusions")
+    validate_portable_namespace([item.archive_path for item in payload] + sorted(RESERVED_NAMES))
     return payload, sorted(set(automatically_excluded))
+
+
+def portable_archive_key(name: str) -> str:
+    if not name or name.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", name):
+        raise ValueError(f"ZIP entry is absolute or drive-qualified: '{name}'")
+    if any(ord(character) < 32 or ord(character) == 127 for character in name):
+        raise ValueError(f"ZIP entry contains a control character: '{name}'")
+    normalized_separators = name.replace("\\", "/")
+    parts = normalized_separators.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ValueError(f"ZIP entry contains an empty or traversal component: '{name}'")
+    for component in parts:
+        normalized_component = unicodedata.normalize("NFKC", component)
+        if normalized_component.endswith((" ", ".")):
+            raise ValueError(f"ZIP entry has a Windows-ambiguous component: '{name}'")
+        basename = normalized_component.split(".", 1)[0].casefold()
+        if basename in WINDOWS_RESERVED_COMPONENTS:
+            raise ValueError(f"ZIP entry uses a Windows-reserved component: '{name}'")
+        if any(character in '<>:"|?*' for character in normalized_component):
+            raise ValueError(f"ZIP entry contains a Windows-invalid character: '{name}'")
+    return unicodedata.normalize("NFKC", normalized_separators).casefold()
+
+
+def validate_portable_namespace(names: list[str]) -> None:
+    by_key: dict[str, str] = {}
+    for name in names:
+        key = portable_archive_key(name)
+        previous = by_key.get(key)
+        if previous is not None and previous != name:
+            raise ValueError(
+                f"portable ZIP namespace collision: '{previous}' and '{name}'"
+            )
+        by_key[key] = name
+    for name in names:
+        if "\\" in name:
+            raise ValueError(f"ZIP entry uses a non-portable backslash separator: '{name}'")
 
 
 def zip_info(name: str, mode: int = 0o644) -> zipfile.ZipInfo:
@@ -255,6 +425,7 @@ def metadata_bytes(
     archive_name: str,
     payload: list[PayloadFile],
     exclusions: list[str],
+    reviewed_sensitive_inclusions: list[str],
 ) -> tuple[bytes, bytes, bytes]:
     generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     manifest = {
@@ -273,6 +444,7 @@ def metadata_bytes(
         "payload_file_count": len(payload),
         "payload_bytes": sum(item.size for item in payload),
         "exclusions": exclusions,
+        "reviewed_sensitive_inclusions": reviewed_sensitive_inclusions,
         "files": [
             {"path": item.archive_path, "size": item.size, "sha256": item.sha256}
             for item in payload
@@ -327,28 +499,30 @@ def build_zip(
                     archive.writestr(zip_info(archive_name), metadata_by_name[archive_name])
                     continue
                 item = payload_by_name[archive_name]
-                with item.absolute_path.open("rb") as source_handle:
+                with open_project_file(item.source_root, item.archive_path) as source_handle:
                     with archive.open(zip_info(item.archive_path, item.mode), "w") as zip_handle:
                         shutil.copyfileobj(source_handle, zip_handle, length=1024 * 1024)
 
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
+        validate_zip(temporary, payload)
         try:
             os.link(temporary, destination)
         except FileExistsError:
             raise ValueError(f"destination already exists and will not be overwritten: {destination}")
-        except OSError:
-            try:
-                with temporary.open("rb") as source_handle, destination.open("xb") as target_handle:
-                    shutil.copyfileobj(source_handle, target_handle, length=1024 * 1024)
-            except FileExistsError:
-                raise ValueError(
-                    f"destination already exists and will not be overwritten: {destination}"
-                )
-            except Exception:
-                destination.unlink(missing_ok=True)
-                raise
+        fsync_directory(destination.parent)
         return destination
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def validate_zip(destination: Path, payload: list[PayloadFile]) -> None:
@@ -358,6 +532,7 @@ def validate_zip(destination: Path, payload: list[PayloadFile]) -> None:
         if corrupt:
             raise ValueError(f"ZIP CRC validation failed for '{corrupt}'")
         actual_names = set(archive.namelist())
+        validate_portable_namespace(archive.namelist())
         if len(archive.namelist()) != len(actual_names):
             raise ValueError("ZIP contains duplicate entry names")
         if actual_names != expected_names:
@@ -426,6 +601,16 @@ def parse_args() -> argparse.Namespace:
         help="Intentional exclusion glob; repeat as needed",
     )
     parser.add_argument(
+        "--include-sensitive",
+        action="append",
+        default=[],
+        metavar="EXACT_PATH",
+        help=(
+            "Include one credential-like file after exact-path review; repeat as needed. "
+            "Globs and paths outside the project are rejected."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the packaging plan without creating an archive",
@@ -461,7 +646,15 @@ def main() -> int:
             raise ValueError(f"destination already exists and will not be overwritten: {destination}")
 
         ignore_patterns = load_ignore_patterns(source, args.exclude)
-        payload, automatic_exclusions = inventory_payload(source, slug, ignore_patterns)
+        reviewed_sensitive_inclusions = sorted(
+            normalize_exact_review_path(path) for path in args.include_sensitive
+        )
+        payload, automatic_exclusions = inventory_payload(
+            source,
+            slug,
+            ignore_patterns,
+            reviewed_sensitive_inclusions=reviewed_sensitive_inclusions,
+        )
         all_exclusions = sorted(set(ignore_patterns + automatic_exclusions))
         plan = {
             "archive": str(destination),
@@ -474,6 +667,7 @@ def main() -> int:
             "payload_file_count": len(payload),
             "payload_bytes": sum(item.size for item in payload),
             "exclusions": all_exclusions,
+            "reviewed_sensitive_inclusions": reviewed_sensitive_inclusions,
         }
         if args.dry_run:
             print(json.dumps(plan, indent=2, sort_keys=True))
@@ -489,13 +683,9 @@ def main() -> int:
             archive_name=archive_name,
             payload=payload,
             exclusions=all_exclusions,
+            reviewed_sensitive_inclusions=reviewed_sensitive_inclusions,
         )
         build_zip(destination, payload, readme_data, manifest_data, checksums_data)
-        try:
-            validate_zip(destination, payload)
-        except Exception:
-            destination.unlink(missing_ok=True)
-            raise
         archive_hash = hash_file(destination)
 
         print(f"Created: {destination}")

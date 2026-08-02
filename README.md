@@ -12,12 +12,12 @@ an agent does something creative with them.
 
 | Skill | Purpose | Open Design | OpenAI ChatGPT / Codex | Other Agent Skills harnesses |
 |---|---|---|---|---|
-| [`package-design-handoff`](skills/package-design-handoff/) | Create immutable design-handoff ZIPs with lowercase kebab-case names, automatic SemVer increments, manifests, checksums, and validation. | Native skill; install documented | Verified | Format-compatible; not yet verified |
+| [`package-design-handoff`](skills/package-design-handoff/) | Create immutable design-handoff ZIPs with lowercase kebab-case names, automatic SemVer increments, manifests, checksums, and validation. | Contract-tested at `517f39a…`; local symlink install | Verified | Format-compatible; not yet verified |
 
 Compatibility labels are intentionally conservative:
 
-- **Native** means the harness reads the shared `SKILL.md` folder directly and
-  the repository documents its discovery path.
+- **Contract-tested** means the repository pins and tests the harness discovery,
+  metadata, and invocation contract at an exact upstream revision.
 - **Verified** means the skill and its executable behavior have been tested with
   the named harness family.
 - **Format-compatible** means the directory follows the open Agent Skills layout,
@@ -52,16 +52,14 @@ behavior, requirements, harness-specific installation, and invocation.
 
 ## Install a skill
 
-Clone the repository, validate it, then use the installer supported by your
-harness. For installers compatible with the open Agent Skills ecosystem, the
-[`skills` CLI](https://github.com/vercel-labs/skills) can install from the local
-checkout:
+Clone the repository, review the revision you intend to run, and validate it.
+Installation is symlink-first: each harness points at the reviewed local checkout
+instead of invoking a mutable package-manager installer.
 
 ```bash
 git clone git@github.com:JonathanPorta/ai-skills.git
 cd ai-skills
 make check
-npx skills add . --skill package-design-handoff
 ```
 
 Using a local checkout keeps private-repository authentication in Git and avoids
@@ -70,17 +68,20 @@ that checkout so pulls update every installed harness in place. See the
 [`package-design-handoff` installation guide](skills/package-design-handoff/README.md)
 for Open Design and Codex commands.
 
-## Why there is no package manifest
+## Current manifest decision
 
-There is no custom `package.json`-style configuration file yet because it would
-duplicate information and commit this collection to an unsettled convention.
+This implementation does not add a collection-level `package.json`-style
+manifest. That is an implementation choice under review, not a claim of prior
+owner ratification. Today the required metadata already lives at skill scope:
 
 - [`SKILL.md`](https://agentskills.io/specification) is already the required
   per-skill manifest and discovery surface.
 - `agents/openai.yaml` carries OpenAI-specific interface metadata without
   changing the portable skill instructions.
-- Open Design reads the portable `SKILL.md` directly, so local installation
-  does not require an additional sidecar manifest.
+- Open Design reads the standard `SKILL.md` directly; the pinned integration
+  test verifies that its discovery heuristics select the non-image prototype
+  path. Local source-checkout installation does not require an
+  `open-design.json` marketplace sidecar.
 - Git records collection history and reviewable changes.
 - Runtime dependencies belong with the script or ecosystem that needs them.
   The current packaging helper uses only Python's standard library.
@@ -88,8 +89,8 @@ duplicate information and commit this collection to an unsettled convention.
 The Agent Skills community is discussing a collection-level
 [`skills.json` and lockfile proposal](https://github.com/agentskills/agentskills/discussions/210),
 but it is not a ratified standard. Add a generated catalog or standard manifest
-when distribution, dependency resolution, or a stable specification makes it
-useful—not because an empty config file feels lonely.
+when the owner accepts one or when distribution, dependency resolution, or a
+stable specification makes it useful.
 
 ## Add a skill
 
@@ -109,13 +110,15 @@ useful—not because an empty config file feels lonely.
 
 ```bash
 make help
+make test
 make check
 ```
 
-`make check` validates naming, required skill-local documentation and metadata,
-UTF-8 and hidden-Unicode safety, Python syntax, OpenAI interface metadata when
-present, and repository-level behavioral tests. It requires GNU Make and Python
-3.10 or newer, with no third-party Python packages.
+`make test` runs behavioral and security regressions. `make check` also parses
+and validates Agent Skills and OpenAI YAML schemas, naming and field limits,
+asset paths, every text or executable resource, hidden Unicode, Python syntax,
+and skill-local documentation. It requires GNU Make and Python 3.10 or newer,
+with no third-party Python packages.
 
 ## Security
 

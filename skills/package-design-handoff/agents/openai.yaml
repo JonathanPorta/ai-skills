@@ -1,14 +1,8 @@
 interface:
   display_name: Package Design Handoff
   short_description: Version and package complete design handoffs
-  default_prompt: Use $package-design-handoff to package this design project as a
-    complete versioned handoff ZIP.
+  default_prompt: Use $package-design-handoff to package this design project as a complete versioned handoff ZIP.
   icon_small: assets/icon.svg
   icon_large: assets/icon.svg
 policy:
-  products:
-  - chatgpt
-  - codex
-  - api
-  - atlas
   allow_implicit_invocation: true

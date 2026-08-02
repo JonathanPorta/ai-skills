@@ -12,17 +12,20 @@ The skill:
 - recognizes older `-vX.Y.Z.zip` archives while emitting the canonical format;
 - packages editable sources, exports, prototypes, assets, code, and handoff notes;
 - excludes version-control internals, dependency trees, caches, temporary files,
-  and previous handoff ZIPs;
+  and previous handoff ZIPs from the same project series;
+- fails closed on credential-like files unless an exact path is reviewed for
+  exclusion or explicit inclusion;
+- rejects symlinked controls and non-portable or colliding ZIP entry names;
 - adds a manifest, checksums, and handoff notes under `_handoff/`; and
-- validates the archive and refuses to overwrite an existing version.
+- validates and fsyncs a private archive before atomic no-clobber publication.
 
 The helper requires Python 3.10 or newer and has no third-party dependencies.
 
 ## Get the repository
 
-Clone the repository to a stable location. The symlinks below keep each harness
-on the checked-out source, so `git pull` updates the installed skill without a
-copy step.
+Clone the repository to a stable location and check out a revision you have
+reviewed. The symlinks below keep each harness on that exact local source;
+review and validate future updates before moving the checkout forward.
 
 ```bash
 git clone git@github.com:JonathanPorta/ai-skills.git "$HOME/src/ai-skills"
@@ -36,9 +39,10 @@ exists elsewhere.
 
 ## Install in Open Design
 
-Open Design natively loads `SKILL.md` folders and follows folders symlinked into
-an Open Design source checkout's `skills/` directory. Link this repository's
-canonical folder instead of copying it:
+Open Design's contract at commit
+`517f39acde402c1a7af2189167a8d6957a3dac71` loads `SKILL.md` folders from a
+source checkout's `skills/` directory. Link this repository's canonical folder
+instead of copying it:
 
 ```bash
 export OPEN_DESIGN_REPO="/absolute/path/to/open-design"
@@ -46,28 +50,30 @@ ln -s "$AI_SKILLS_REPO/skills/package-design-handoff" \
   "$OPEN_DESIGN_REPO/skills/package-design-handoff"
 ```
 
-The shared `SKILL.md` intentionally uses only the portable Agent Skills
-frontmatter accepted by Codex. Open Design loads that format without
-modification. Ask Open Design to "package this project for handoff" or select
-`package-design-handoff` from its skills UI.
+The shared `SKILL.md` uses strict standard Agent Skills frontmatter. Its trigger
+and workflow prose are contract-tested against the pinned Open Design inference
+logic so the utility resolves to the non-image `prototype` path. Ask Open Design
+to "package this project for handoff" or select `package-design-handoff` from
+its skills UI.
 
 Restart the Open Design daemon after adding the symlink. Do not run the command
 if the destination already contains a real directory you need to keep.
 
-Open Design releases that provide the skill-management CLI can create and index
-the local symlink for you:
+The pinned Open Design CLI can inspect discovered skills but cannot install
+them. After restarting the daemon, verify the source-checkout link with:
 
 ```bash
-od skill add "$AI_SKILLS_REPO/skills/package-design-handoff"
-od skill list
+od skills list
+od skills show package-design-handoff
 ```
 
 Confirm that `od` resolves to the Open Design CLI before using that shortcut;
 many Unix systems already ship an unrelated octal-dump command named `od`.
 
-No `open-design.json` or Open Design-specific `SKILL.md` fields are required to
-install or run this skill. That sidecar is only needed if the skill is later
-published as an enriched Open Design marketplace listing.
+Do not use the retired singular install command. Re-test newer Open Design
+revisions before expanding the compatibility claim. An `open-design.json`
+sidecar is not needed for this source-checkout workflow; marketplace/plugin
+distribution is a separate contract.
 
 ## Install in Codex
 
@@ -107,4 +113,6 @@ python3 "$AI_SKILLS_REPO/skills/package-design-handoff/scripts/package_handoff.p
 ```
 
 Run the helper with `--help` for explicit-version, output-directory, and custom
-exclusion options.
+exclusion options. Credential-like files require either an exact `--exclude`
+path or a deliberately reviewed exact `--include-sensitive` path; globs do not
+count as credential review.

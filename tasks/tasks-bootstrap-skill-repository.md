@@ -11,6 +11,9 @@
 | AC-3 | Canonical commands validate without third-party dependencies | 1.0 |
 | AC-4 | Packaging behavior has executable regression coverage | 1.0 |
 | AC-5 | Skill-local Open Design and Codex installation is documented and validated | 2.0 |
+| AC-6 | Credential and portable-namespace boundaries fail closed | 3.0 |
+| AC-7 | Private validation and atomic no-clobber publication are race-safe | 3.0 |
+| AC-8 | YAML schemas and every executable/text resource are validated | 3.0 |
 
 ## Relevant Files
 
@@ -19,6 +22,9 @@
 - `Makefile` — Canonical command surface.
 - `scripts/check_skills.py` — Collection structure and source validator.
 - `tests/test_package_handoff.py` — End-to-end packaging regression tests.
+- `tests/test_check_skills.py` — Validator schema and hostile-resource regressions.
+- `tests/test_open_design_integration.py` — Exact-revision Open Design contract test.
+- `.github/workflows/tests.yml` — Pinned Linux/macOS checks and Open Design contract job.
 - `skills/package-design-handoff/` — Canonical first skill copied from the validated installed version.
 - `skills/package-design-handoff/README.md` — Skill behavior, requirements, installation, and invocation guide.
 
@@ -49,41 +55,57 @@
     - `make check` reports one validated skill and four passing behavioral/documentation tests.
     - `git diff --check` exits zero.
 
+- [x] 3.0 Close security, publication, validation, and compatibility review findings <!-- Serves: AC-6, AC-7, AC-8 -->
+  - [x] 3.1 Add failing regression tests for credential payloads, external ignore symlinks, archive/dependency classification, portable-name collisions, and publication races.
+  - [x] 3.2 Keep every payload/control read inside the project and require exact review for credential-like inclusion or exclusion.
+  - [x] 3.3 Validate and fsync a private ZIP before atomic no-clobber publication.
+  - [x] 3.4 Replace regex metadata checks with strict YAML parsing and Agent Skills, OpenAI, and Open Design schema validation.
+  - [x] 3.5 Pin the exercised Open Design revision and GitHub Actions, prove strict frontmatter resolves to the non-image prototype path, and remove unsupported or mutable install commands.
+  - **Validates when:**
+    - `make test` covers the reported negative and positive controls.
+    - `make check` validates the repository and passes all tests.
+    - `make integration-open-design OPEN_DESIGN_REPO=<pinned-checkout>` proves explicit non-image discovery and emits a valid ZIP.
+    - Workflow action references and the Open Design checkout use full commit SHAs.
+
 ### Task 1.0 Preflight
 
 - Validation plan written: yes
 - Validation plan saved in artifact: yes
-- Validation review mode recorded in session state: `auto-proceed`
+- Validation review mode recorded in the durable task artifact: implementation verification proceeds automatically; owner acceptance occurs through PR approval.
 - Make targets or equivalent command surface identified: yes
 - Acceptance criteria served by this task listed: yes
 - Relevant files re-read before modification: yes
 
 ## Current Status
 
-Implementation and automated verification are complete; awaiting human review.
+Implementation and automated verification are complete; owner acceptance is
+awaiting pull-request approval. No task checkbox is being used as a substitute
+for that owner decision.
 
 ## Validation Results
 
 | Check | Result | Evidence |
 |---|---|---|
 | Validation fails before implementation | PASS | `make check` exited nonzero with `skills/ is required and must contain at least one skill`. |
-| Canonical command discovery | PASS | `make help` listed `help` and `check`. |
-| Collection and behavior validation | PASS | `make check` validated one skill and ran four tests with zero failures. |
+| Canonical command discovery | PASS | `make help` lists `help`, `test`, `check`, and `integration-open-design`. |
+| Collection and behavior validation | PASS | `make check` validates one skill and runs the behavioral/security suite. |
 | Standard skill validation | PASS | `quick_validate.py` reported `Skill is valid!`. |
-| Runtime skill parity | PASS | `SKILL.md`, OpenAI metadata, icon, and packaging helper match the installed skill; the new README is intentionally repository-local documentation. |
+| Open Design contract | PASS | Exact commit `517f39acde402c1a7af2189167a8d6957a3dac71` infers the strict skill as prototype rather than media work, and the integration emits a ZIP. |
+| Security and publication controls | PASS | Credential, symlink, namespace, private-validation, competing-destination, and no-partial-fallback regressions pass. |
 | Patch hygiene | PASS | `git diff --check` exited zero. |
 
 ## Phase-Gate Audit
 
-**Result:** PASS
+**Result:** IMPLEMENTATION PASS; OWNER ACCEPTANCE PENDING
 
 **Rules compliance:**
 
-- The approved `skills/<skill-name>/` layout, no-collection-manifest decision, skill-local documentation, Open Design support, validation-first sequence, and Makefile command surface are implemented.
+- The owner-confirmed `skills/<skill-name>/` layout, skill-local documentation, symlink-first installation, Open Design support, validation-first sequence, and Makefile command surface are implemented.
+- No-collection-manifest and metadata-placement choices remain reviewable implementation decisions; they are not described as owner-approved facts.
 
 **Listed done but not actually done:**
 
-- None.
+- Owner PR approval/merge has not occurred and is not represented as complete.
 
 **Required but not done:**
 
@@ -92,14 +114,15 @@ Implementation and automated verification are complete; awaiting human review.
 **Done differently than documented:**
 
 - The original no-skill-README convention was superseded by the owner's explicit request for per-skill behavior and installation documentation.
+- Open Design support stays strict-Agent-Skills-compatible; the pinned integration test guards the media-neutral prose that makes inference resolve to prototype.
 
 **Documentation/state updates needed:**
 
-- None. The active session-state file is a local working artifact and is not part of this branch.
+- This task artifact is the durable lifecycle record; it intentionally distinguishes implementation evidence from owner acceptance.
 
 **Verification performed:**
 
-- Red-first failure, `make help`, `make check`, standard skill validation, runtime-file comparison, and `git diff --check` all completed successfully.
+- Red-first security failures, `make help`, `make test`, `make check`, pinned Open Design integration, action-pin inspection, and `git diff --check` all completed successfully.
 
 **Recommended next action:**
 
