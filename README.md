@@ -12,7 +12,7 @@ an agent does something creative with them.
 
 | Skill | Purpose | Open Design | OpenAI ChatGPT / Codex | Other Agent Skills harnesses |
 |---|---|---|---|---|
-| [`package-design-handoff`](skills/package-design-handoff/) | Create immutable design-handoff ZIPs with lowercase kebab-case names, automatic SemVer increments, manifests, checksums, and validation. | Contract-tested at `517f39a…`; local symlink install | Verified | Format-compatible; not yet verified |
+| [`package-design-handoff`](skills/package-design-handoff/) | Create immutable design-handoff ZIPs with lowercase kebab-case names, automatic SemVer increments, manifests, checksums, and validation. | GitHub plugin import verified; source-checkout contract-tested at `517f39a…` | Verified | Format-compatible; not yet verified |
 
 Compatibility labels are intentionally conservative:
 
@@ -52,9 +52,22 @@ behavior, requirements, harness-specific installation, and invocation.
 
 ## Install a skill
 
-Clone the repository, review the revision you intend to run, and validate it.
-Installation is symlink-first: each harness points at the reviewed local checkout
-instead of invoking a mutable package-manager installer.
+Open Design can import an individual skill directory directly from GitHub. Open
+**Plugins**, select **Import plugin** and **From GitHub**, then enter:
+
+```text
+github:JonathanPorta/ai-skills@main/skills/package-design-handoff
+```
+
+This is an install-time snapshot, not a live checkout. Re-import the same source
+or use Open Design's plugin-upgrade command to fetch later changes from `main`.
+See the [`package-design-handoff` installation guide](skills/package-design-handoff/README.md)
+for screenshots, update behavior, reproducible revision pinning, and the separate
+execution-agent installation requirement.
+
+For filesystem-discovered harnesses, clone the repository, review the revision
+you intend to run, and validate it. Symlinking those harnesses to the checkout
+lets a reviewed pull update their installed copy in place.
 
 ```bash
 git clone git@github.com:JonathanPorta/ai-skills.git
@@ -64,9 +77,7 @@ make check
 
 Using a local checkout keeps private-repository authentication in Git and avoids
 putting credentials in an installer command. Prefer symlinking each skill from
-that checkout so pulls update every installed harness in place. See the
-[`package-design-handoff` installation guide](skills/package-design-handoff/README.md)
-for Open Design and Codex commands.
+that checkout when the target harness supports filesystem discovery.
 
 ## Current manifest decision
 
@@ -78,10 +89,15 @@ owner ratification. Today the required metadata already lives at skill scope:
   per-skill manifest and discovery surface.
 - `agents/openai.yaml` carries OpenAI-specific interface metadata without
   changing the portable skill instructions.
-- Open Design reads the standard `SKILL.md` directly; the pinned integration
-  test verifies that its discovery heuristics select the non-image prototype
-  path. Local source-checkout installation does not require an
-  `open-design.json` marketplace sidecar.
+- Open Design can adapt a standard `SKILL.md` directory into a minimal plugin;
+  the GitHub-subpath import has been exercised in the desktop UI. The pinned
+  source-checkout integration separately verifies discovery, staging, and
+  execution at revision `517f39a…`.
+- The skill currently has no `open-design.json` sidecar. It therefore appears as
+  a minimal `v0.0.0` plugin, and the selected local execution agent must discover
+  its own installation of the skill to load the complete instructions and
+  bundled helper. Add a sidecar only when Open Design-native metadata and direct
+  plugin-local skill staging are intentionally adopted and tested.
 - Git records collection history and reviewable changes.
 - Runtime dependencies belong with the script or ecosystem that needs them.
   The current packaging helper uses only Python's standard library.

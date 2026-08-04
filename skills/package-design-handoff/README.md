@@ -21,11 +21,89 @@ The skill:
 
 The helper requires Python 3.10 or newer and has no third-party dependencies.
 
-## Get the repository
+## Install in Open Design
+
+Open Design's desktop Plugins UI accepts a standard Agent Skills directory as a
+minimal plugin. No repository clone is required for this installation path:
+
+1. Open **Plugins**.
+2. Select **Import plugin**, then **From GitHub**.
+3. Enter the complete repository subpath below.
+4. Select **Import**.
+5. Open **Details** on the installed card, then select **Use** to insert the
+   example prompt or **Use without prompt** to apply only the plugin structure.
+
+```text
+github:JonathanPorta/ai-skills@main/skills/package-design-handoff
+```
+
+Import the individual skill directory, not the repository root. A successful
+minimal import currently appears as **Package Design Handoff**, version `v0.0.0`,
+kind `skill`, task kind `new-generation`, and trust `Restricted`. Those values
+are synthesized by Open Design because this portable skill does not currently
+ship an `open-design.json` sidecar.
+
+<details>
+<summary>Open Design installation screenshots</summary>
+
+![Installed Package Design Handoff plugin card](assets/open-design-import-plugin.png)
+
+![Installed Package Design Handoff plugin card](assets/open-design-installed-plugin.png)
+
+![Package Design Handoff plugin details](assets/open-design-plugin-details.png)
+
+![Package Design Handoff source actions](assets/open-design-plugin-source-menu.png)
+
+![Package Design Handoff Use menu](assets/open-design-use-menu.png)
+
+</details>
+
+### Update an Open Design installation
+
+A GitHub plugin import is copied into Open Design's local plugin registry. It is
+not a live Git checkout, and Open Design does not periodically poll `main`.
+Update it explicitly by re-importing the same GitHub source or, when the Open
+Design CLI is available, by running:
+
+```bash
+od plugin upgrade package-design-handoff
+```
+
+Because the recorded source contains `@main`, either update path fetches the
+current contents of `main` at that time. Existing applied runs retain their
+immutable plugin snapshot; later uses receive the upgraded copy.
+
+For a reproducible installation, replace `main` with a reviewed commit SHA:
+
+```text
+github:JonathanPorta/ai-skills@<commit-sha>/skills/package-design-handoff
+```
+
+Confirm that `od` resolves to the Open Design CLI before using it; many Unix
+systems already ship an unrelated octal-dump command named `od`.
+
+### Install in the local execution agent too
+
+Open Design's plugin registry and each local execution agent's skill registry
+are separate. The current `SKILL.md`-only import creates the Open Design card and
+example prompt, but it does not install the skill into Codex CLI, Claude Code, or
+another selected local agent. Install the skill separately in every execution
+agent that must load the complete workflow and bundled Python helper.
+
+For Codex CLI, use the instructions below. Other agents need an equivalent
+Agent Skills installation in their own configured skill directory. Codex
+subagents do not need separate copies: they inherit the parent session's skill
+configuration unless a custom agent explicitly overrides it. A future
+Open Design sidecar that declares `od.context.skills[{ path: "./SKILL.md" }]`
+could let Open Design inject and stage this plugin-local skill directly; that is
+not the current repository contract.
+
+## Get the repository for a local installation
 
 Clone the repository to a stable location and check out a revision you have
-reviewed. The symlinks below keep each harness on that exact local source;
-review and validate future updates before moving the checkout forward.
+reviewed. The symlinks below keep each filesystem-discovered harness on that
+local source; review and validate future updates before moving the checkout
+forward.
 
 ```bash
 git clone git@github.com:JonathanPorta/ai-skills.git "$HOME/src/ai-skills"
@@ -37,8 +115,9 @@ export AI_SKILLS_REPO="$PWD"
 Use an absolute checkout path for `AI_SKILLS_REPO` if the repository already
 exists elsewhere.
 
-## Install in Open Design
+## Install in an Open Design source checkout
 
+This development path is separate from the desktop plugin import above.
 Open Design's contract at commit
 `517f39acde402c1a7af2189167a8d6957a3dac71` loads `SKILL.md` folders from a
 source checkout's `skills/` directory. Link this repository's canonical folder
@@ -66,9 +145,6 @@ them. After restarting the daemon, verify the source-checkout link with:
 od skills list
 od skills show package-design-handoff
 ```
-
-Confirm that `od` resolves to the Open Design CLI before using that shortcut;
-many Unix systems already ship an unrelated octal-dump command named `od`.
 
 Do not use the retired singular install command. Re-test newer Open Design
 revisions before expanding the compatibility claim. An `open-design.json`
