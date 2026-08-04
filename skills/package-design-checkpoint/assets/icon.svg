@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">Package Design Checkpoint</title>
+  <rect width="128" height="128" rx="28" fill="#17243d"/>
+  <path d="M34 29h60v14H48v42h46v14H34z" fill="#8ad8c8"/>
+  <path d="M56 55h38v14H70v16H56z" fill="#f5c96a"/>
+  <circle cx="94" cy="92" r="12" fill="#ef6f61"/>
+</svg>

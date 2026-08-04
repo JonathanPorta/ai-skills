@@ -1,7 +1,7 @@
 interface:
   display_name: Package Design Handoff
-  short_description: Version and package complete design handoffs
-  default_prompt: Use $package-design-handoff to package this design project as a complete versioned handoff ZIP.
+  short_description: Package final implementation-ready handoffs
+  default_prompt: Use $package-design-handoff to package this accepted design project as a complete versioned implementation handoff ZIP. For interim review, use $package-design-checkpoint instead.
   icon_small: assets/icon.svg
   icon_large: assets/icon.svg
 policy:

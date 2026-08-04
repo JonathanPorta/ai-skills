@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import subprocess
 import sys
 import tempfile
@@ -36,6 +37,29 @@ class SkillValidatorTests(unittest.TestCase):
             "  icon_small: assets/icon.svg\n"
             "policy:\n"
             "  allow_implicit_invocation: true\n",
+            encoding="utf-8",
+        )
+        (skill / "open-design.json").write_text(
+            json.dumps(
+                {
+                    "$schema": "https://open-design.ai/schemas/plugin.v1.json",
+                    "specVersion": "1.0.0",
+                    "name": "demo-skill",
+                    "title": "Demo Skill",
+                    "version": "0.1.0",
+                    "description": "Run the demo workflow.",
+                    "compat": {"agentSkills": [{"path": "./SKILL.md"}]},
+                    "od": {
+                        "kind": "scenario",
+                        "taskKind": "tune-collab",
+                        "mode": "export",
+                        "context": {"skills": [{"path": "./SKILL.md"}]},
+                        "capabilities": ["prompt:inject"],
+                    },
+                },
+                indent=2,
+            )
+            + "\n",
             encoding="utf-8",
         )
         return repository, skill
@@ -110,6 +134,68 @@ class SkillValidatorTests(unittest.TestCase):
             result = self.validate(repository)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("relative asset path", result.stderr)
+
+    def test_open_design_manifest_identity_and_runtime_binding_are_required(self) -> None:
+        controls = (
+            (("name", "wrong-name"), "must match skill directory"),
+            (("version", "main"), "stable SemVer"),
+        )
+        for (field, value), message in controls:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as temporary:
+                    repository, skill = self.make_repository(Path(temporary))
+                    manifest_file = skill / "open-design.json"
+                    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+                    manifest[field] = value
+                    manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
+
+                    result = self.validate(repository)
+
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(message, result.stderr)
+
+        for missing_path in ("compat", "context"):
+            with self.subTest(missing_path=missing_path):
+                with tempfile.TemporaryDirectory() as temporary:
+                    repository, skill = self.make_repository(Path(temporary))
+                    manifest_file = skill / "open-design.json"
+                    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+                    if missing_path == "compat":
+                        manifest["compat"]["agentSkills"] = []
+                    else:
+                        manifest["od"]["context"]["skills"] = []
+                    manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
+
+                    result = self.validate(repository)
+
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("./SKILL.md", result.stderr)
+
+    def test_open_design_manifest_local_paths_must_resolve_inside_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository, skill = self.make_repository(Path(temporary))
+            manifest_file = skill / "open-design.json"
+            manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+            manifest["od"]["context"]["skills"] = [{"path": "../outside/SKILL.md"}]
+            manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
+
+            result = self.validate(repository)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("inside the skill", result.stderr)
+
+    def test_open_design_compat_agent_skill_entries_require_a_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repository, skill = self.make_repository(Path(temporary))
+            manifest_file = skill / "open-design.json"
+            manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+            manifest["compat"]["agentSkills"].append({"ref": "phantom-skill"})
+            manifest_file.write_text(json.dumps(manifest), encoding="utf-8")
+
+            result = self.validate(repository)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("compat.agentSkills[1].path is required", result.stderr)
 
     def test_executable_and_code_resources_reject_hidden_format_controls(self) -> None:
         controls = (

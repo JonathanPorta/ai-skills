@@ -42,9 +42,12 @@ EXCLUDED_DIR_NAMES = {
     "__pycache__",
     "node_modules",
 }
-EXCLUDED_FILE_NAMES = {".DS_Store", "Thumbs.db"}
+EXCLUDED_FILE_NAMES = {".DS_Store", "Thumbs.db", ".git", ".hg", ".svn"}
+EXCLUDED_DIR_NAMES_CASEFOLD = {name.casefold() for name in EXCLUDED_DIR_NAMES}
+EXCLUDED_FILE_NAMES_CASEFOLD = {name.casefold() for name in EXCLUDED_FILE_NAMES}
 SENSITIVE_EXACT_NAMES = {
     ".env",
+    ".envrc",
     ".git-credentials",
     ".netrc",
     ".npmrc",
@@ -54,14 +57,21 @@ SENSITIVE_EXACT_NAMES = {
     "_netrc",
     "application_default_credentials.json",
     "auth.json",
+    "auth.yaml",
+    "auth.yml",
     "client_secret.json",
     "credentials",
     "credentials.json",
+    "credentials.yaml",
+    "credentials.yml",
     "id_dsa",
     "id_ecdsa",
     "id_ed25519",
     "id_rsa",
     "secrets.json",
+    "secrets.yaml",
+    "secrets.yml",
+    "token.json",
 }
 SENSITIVE_SUFFIXES = (".key", ".p12", ".pfx", ".pem")
 SENSITIVE_PATH_SUFFIXES = {
@@ -231,6 +241,8 @@ def credential_like_path(relative_path: str) -> bool:
     parts = tuple(part.casefold() for part in path.parts)
     name = parts[-1]
     normalized_name = name.replace("_", "-")
+    structured_suffixes = (".json", ".yaml", ".yml", ".toml")
+    structured_stem = normalized_name.rsplit(".", 1)[0]
     return (
         name in SENSITIVE_EXACT_NAMES
         or name.startswith(".env.")
@@ -241,10 +253,20 @@ def credential_like_path(relative_path: str) -> bool:
             for suffix in SENSITIVE_PATH_SUFFIXES
         )
         or (
-            name.endswith(".json")
-            and any(
-                marker in normalized_name
-                for marker in ("client-secret", "credentials", "service-account")
+            name.endswith(structured_suffixes)
+            and (
+                structured_stem in {"auth", "credential", "credentials", "secret", "secrets", "token"}
+                or any(
+                    marker in structured_stem
+                    for marker in (
+                        "access-token",
+                        "auth-token",
+                        "client-secret",
+                        "credentials",
+                        "refresh-token",
+                        "service-account",
+                    )
+                )
             )
         )
         or "private-key" in name
@@ -283,6 +305,13 @@ def version_pattern(slug: str) -> re.Pattern[str]:
     )
 
 
+def checkpoint_archive_pattern(slug: str) -> re.Pattern[str]:
+    return re.compile(
+        rf"^{re.escape(slug)}-checkpoint-(?:v)?"
+        r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.zip$"
+    )
+
+
 def discover_versions(output_dir: Path, slug: str) -> list[tuple[Version, Path]]:
     pattern = version_pattern(slug)
     found: list[tuple[Version, Path]] = []
@@ -318,6 +347,11 @@ def inventory_payload(
     reviewed_sensitive_inclusions: list[str] | None = None,
 ) -> tuple[list[PayloadFile], list[str]]:
     archive_pattern = version_pattern(slug)
+    checkpoint_pattern = checkpoint_archive_pattern(slug)
+    any_checkpoint_pattern = re.compile(
+        r"^.+-checkpoint-(?:v)?(?:0|[1-9]\d*)\."
+        r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.zip$"
+    )
     exact_exclusions = exact_exclusion_paths(ignore_patterns)
     reviewed_inclusions = {
         normalize_exact_review_path(path) for path in (reviewed_sensitive_inclusions or [])
@@ -333,7 +367,9 @@ def inventory_payload(
         for name in sorted(dir_names):
             path = current / name
             relative = path.relative_to(source).as_posix()
-            if name in EXCLUDED_DIR_NAMES or excluded(relative, ignore_patterns):
+            if name.casefold() in EXCLUDED_DIR_NAMES_CASEFOLD or excluded(
+                relative, ignore_patterns
+            ):
                 automatically_excluded.append(relative + "/")
             elif relative == METADATA_DIR or relative.startswith(METADATA_DIR + "/"):
                 raise ValueError(
@@ -365,8 +401,10 @@ def inventory_payload(
                         "or an exact --include-sensitive review"
                     )
             if (
-                name in EXCLUDED_FILE_NAMES
+                name.casefold() in EXCLUDED_FILE_NAMES_CASEFOLD
                 or archive_pattern.fullmatch(name)
+                or checkpoint_pattern.fullmatch(name)
+                or any_checkpoint_pattern.fullmatch(name)
                 or (excluded(relative, ignore_patterns) and not reviewed_sensitive)
             ):
                 automatically_excluded.append(relative)

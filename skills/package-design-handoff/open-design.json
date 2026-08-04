@@ -1,0 +1,47 @@
+{
+  "$schema": "https://open-design.ai/schemas/plugin.v1.json",
+  "specVersion": "1.0.0",
+  "name": "package-design-handoff",
+  "title": "Package Design Handoff",
+  "version": "0.1.0",
+  "description": "Package an accepted design project into an immutable, complete, versioned implementation handoff ZIP.",
+  "author": {
+    "name": "Jonathan Porta",
+    "url": "https://github.com/JonathanPorta"
+  },
+  "homepage": "https://github.com/JonathanPorta/ai-skills/tree/main/skills/package-design-handoff",
+  "icon": "./assets/icon.svg",
+  "tags": [
+    "design",
+    "handoff",
+    "archive",
+    "semver"
+  ],
+  "compat": {
+    "agentSkills": [
+      {
+        "path": "./SKILL.md"
+      }
+    ]
+  },
+  "od": {
+    "kind": "scenario",
+    "taskKind": "tune-collab",
+    "mode": "export",
+    "platform": "desktop",
+    "scenario": "design-handoff",
+    "useCase": {
+      "query": "Package the accepted current OpenDesign project as a complete, immutable, versioned implementation handoff ZIP. Follow the Package Design Handoff workflow exactly."
+    },
+    "context": {
+      "skills": [
+        {
+          "path": "./SKILL.md"
+        }
+      ]
+    },
+    "capabilities": [
+      "prompt:inject"
+    ]
+  }
+}

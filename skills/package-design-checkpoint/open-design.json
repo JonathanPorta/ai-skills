@@ -1,0 +1,47 @@
+{
+  "$schema": "https://open-design.ai/schemas/plugin.v1.json",
+  "specVersion": "1.0.0",
+  "name": "package-design-checkpoint",
+  "title": "Package Design Checkpoint",
+  "version": "0.1.0",
+  "description": "Freeze the current design state as an immutable, reviewable, separately versioned checkpoint ZIP without claiming final implementation readiness.",
+  "author": {
+    "name": "Jonathan Porta",
+    "url": "https://github.com/JonathanPorta"
+  },
+  "homepage": "https://github.com/JonathanPorta/ai-skills/tree/main/skills/package-design-checkpoint",
+  "icon": "./assets/icon.svg",
+  "tags": [
+    "design",
+    "checkpoint",
+    "review",
+    "semver"
+  ],
+  "compat": {
+    "agentSkills": [
+      {
+        "path": "./SKILL.md"
+      }
+    ]
+  },
+  "od": {
+    "kind": "scenario",
+    "taskKind": "tune-collab",
+    "mode": "export",
+    "platform": "desktop",
+    "scenario": "design-checkpoint",
+    "useCase": {
+      "query": "Freeze the current OpenDesign project as an immutable, versioned design-review checkpoint with a root index, one primary target, functionally labeled alternatives, and a concise changelog. Do not create a full implementation handoff."
+    },
+    "context": {
+      "skills": [
+        {
+          "path": "./SKILL.md"
+        }
+      ]
+    },
+    "capabilities": [
+      "prompt:inject"
+    ]
+  }
+}

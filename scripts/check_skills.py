@@ -86,6 +86,16 @@ OPENAI_INTERFACE_FIELDS = {
 OPENAI_POLICY_FIELDS = {"allow_implicit_invocation"}
 OPENAI_DEPENDENCY_FIELDS = {"tools"}
 OPENAI_TOOL_FIELDS = {"type", "value", "description", "transport", "url"}
+OPEN_DESIGN_SCHEMA = "https://open-design.ai/schemas/plugin.v1.json"
+OPEN_DESIGN_SPEC_VERSION = "1.0.0"
+SEMVER_PATTERN = re.compile(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)")
+OPEN_DESIGN_KINDS = {"skill", "scenario", "atom", "bundle"}
+OPEN_DESIGN_TASK_KINDS = {
+    "new-generation",
+    "code-migration",
+    "figma-migration",
+    "tune-collab",
+}
 
 
 @dataclass(frozen=True)
@@ -471,6 +481,129 @@ def validate_openai_schema(value: Any, skill_dir: Path, metadata_file: Path) -> 
                     raise ValueError(f"{relative} dependencies.tools[{index}].{key} must be a string")
 
 
+def require_json_mapping(value: Any, path: Path, context: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} field '{context}' must be a JSON object")
+    return value
+
+
+def require_json_string(mapping: dict[str, Any], key: str, path: Path, context: str) -> str:
+    value = mapping.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{path} {context} must define non-empty string '{key}'")
+    return value.strip()
+
+
+def validate_plugin_local_path(skill_dir: Path, value: Any, manifest_path: Path, context: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{manifest_path} {context} must define a non-empty local path")
+    path_value = value.strip()
+    if "\\" in path_value:
+        raise ValueError(f"{manifest_path} {context} must stay inside the skill and use '/'")
+    pure = PurePosixPath(path_value)
+    if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts):
+        raise ValueError(f"{manifest_path} {context} must stay inside the skill")
+    relative_parts = pure.parts
+    current = skill_dir
+    for part in relative_parts:
+        current = current / part
+        try:
+            file_stat = current.lstat()
+        except FileNotFoundError as error:
+            raise ValueError(f"{manifest_path} {context} does not exist: '{path_value}'") from error
+        if stat.S_ISLNK(file_stat.st_mode):
+            raise ValueError(f"{manifest_path} {context} must not reference a symlink")
+    if not current.is_file():
+        raise ValueError(f"{manifest_path} {context} must reference a file")
+    return "./" + "/".join(relative_parts)
+
+
+def local_skill_paths(
+    value: Any,
+    skill_dir: Path,
+    manifest_path: Path,
+    context: str,
+    *,
+    require_path: bool = False,
+) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{manifest_path} {context} must be a list containing ./SKILL.md")
+    paths: list[str] = []
+    for index, item in enumerate(value):
+        entry = require_json_mapping(item, manifest_path, f"{context}[{index}]")
+        if "path" not in entry:
+            if require_path:
+                raise ValueError(f"{manifest_path} {context}[{index}].path is required")
+            continue
+        paths.append(
+            validate_plugin_local_path(
+                skill_dir,
+                entry["path"],
+                manifest_path,
+                f"{context}[{index}].path",
+            )
+        )
+    return paths
+
+
+def validate_open_design_schema(value: Any, skill_dir: Path, manifest_file: Path) -> None:
+    relative = Path(label(manifest_file))
+    manifest = require_json_mapping(value, relative, "document")
+    if manifest.get("$schema") != OPEN_DESIGN_SCHEMA:
+        raise ValueError(f"{relative} must reference the Open Design plugin v1 schema")
+    if manifest.get("specVersion") != OPEN_DESIGN_SPEC_VERSION:
+        raise ValueError(f"{relative} specVersion must be '{OPEN_DESIGN_SPEC_VERSION}'")
+    name = require_json_string(manifest, "name", relative, "document")
+    if name != skill_dir.name:
+        raise ValueError(f"{relative} name '{name}' must match skill directory '{skill_dir.name}'")
+    version = require_json_string(manifest, "version", relative, "document")
+    if not SEMVER_PATTERN.fullmatch(version):
+        raise ValueError(f"{relative} version must be stable SemVer X.Y.Z")
+    for key in ("title", "description"):
+        require_json_string(manifest, key, relative, "document")
+    if "icon" in manifest:
+        icon = require_json_string(manifest, "icon", relative, "document")
+        validate_relative_asset(skill_dir, icon, relative, "icon")
+
+    compat = require_json_mapping(manifest.get("compat"), relative, "compat")
+    compatible_paths = local_skill_paths(
+        compat.get("agentSkills"),
+        skill_dir,
+        relative,
+        "compat.agentSkills",
+        require_path=True,
+    )
+    if "./SKILL.md" not in compatible_paths:
+        raise ValueError(f"{relative} compat.agentSkills must include ./SKILL.md")
+
+    od = require_json_mapping(manifest.get("od"), relative, "od")
+    kind = require_json_string(od, "kind", relative, "od")
+    if kind not in OPEN_DESIGN_KINDS:
+        raise ValueError(f"{relative} od.kind is not recognized: '{kind}'")
+    task_kind = require_json_string(od, "taskKind", relative, "od")
+    if task_kind not in OPEN_DESIGN_TASK_KINDS:
+        raise ValueError(f"{relative} od.taskKind is not recognized: '{task_kind}'")
+    require_json_string(od, "mode", relative, "od")
+
+    context = require_json_mapping(od.get("context"), relative, "od.context")
+    runtime_paths = local_skill_paths(
+        context.get("skills"),
+        skill_dir,
+        relative,
+        "od.context.skills",
+    )
+    if "./SKILL.md" not in runtime_paths:
+        raise ValueError(f"{relative} od.context.skills must include ./SKILL.md")
+
+    capabilities = od.get("capabilities")
+    if not isinstance(capabilities, list) or not all(
+        isinstance(capability, str) and capability for capability in capabilities
+    ):
+        raise ValueError(f"{relative} od.capabilities must be a list of strings")
+    if "prompt:inject" not in capabilities:
+        raise ValueError(f"{relative} od.capabilities must include prompt:inject")
+
+
 def validate_text_safety(path: Path, text: str, reject_format_controls: bool) -> None:
     for offset, character in enumerate(text):
         codepoint = ord(character)
@@ -558,6 +691,14 @@ def validate_skill(skill_dir: Path) -> str:
     if openai_metadata.exists():
         metadata_document = parse_yaml(read_utf8(openai_metadata), Path(label(openai_metadata)))
         validate_openai_schema(metadata_document, skill_dir, openai_metadata)
+    open_design_manifest = skill_dir / "open-design.json"
+    if not open_design_manifest.is_file():
+        raise ValueError(f"{label(open_design_manifest)} is required")
+    try:
+        manifest_document = json.loads(read_utf8(open_design_manifest))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"{label(open_design_manifest)} is not valid JSON: {error}") from error
+    validate_open_design_schema(manifest_document, skill_dir, open_design_manifest)
     return name
 
 
