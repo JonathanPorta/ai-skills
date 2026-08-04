@@ -90,6 +90,20 @@
     - `git diff --check` exits zero.
     - Ubuntu and macOS matrix jobs pass for Python 3.10 and 3.14.
 
+- [ ] 4.5 Align the paired plugin icon semantics <!-- Serves: AC-1, AC-7 -->
+  - [ ] 4.5.1 Preserve the checkpoint SVG byte-for-byte.
+  - [ ] 4.5.2 Derive the handoff SVG from the checkpoint composition: retain
+    the navy background, mint frame, and unmoved amber inner shape; remove the
+    coral dot; close the frame's right side with aligned mint geometry.
+  - [ ] 4.5.3 Render both SVGs side by side and at small sizes, validate the
+    SVG resources, and publish the focused update to draft PR #4.
+  - **Validates when:**
+    - The checkpoint asset checksum is unchanged.
+    - The handoff asset shares the checkpoint view box, background, mint/yellow
+      geometry, and accessible-title structure; only its final-state closure
+      and absence of the coral dot differ.
+    - The pair remains legible at plugin-card and native sizes.
+
 ### Task 1.0 Preflight
 
 - Validation plan written: yes
@@ -131,10 +145,31 @@
 3. Publish the focused fix and require all Ubuntu/macOS Python matrix jobs to
    pass before restoring Task 4.0 to complete.
 
+### Task 4.5 Paired Icon Preflight
+
+- Validation plan written: yes
+- Validation plan saved in artifact: yes
+- Validation review mode: auto-proceed; the owner supplied exact visual deltas
+  and explicitly requested publication to the existing draft PR.
+- Canonical command surface identified: yes (`make check`, SVG XML/resource
+  validation, side-by-side visual rendering, and `git diff --check`)
+- Acceptance criteria served by this task listed: yes (AC-1, AC-7)
+- Existing paired SVG assets and repository visual-consistency rules read before
+  modification: yes
+
+**Pre-implementation validation plan:**
+
+1. Record the checkpoint SVG checksum and leave the file untouched.
+2. Apply only the approved semantic delta to the handoff SVG.
+3. Render the pair together and at small size; inspect alignment, color,
+   closure, and legibility.
+4. Run repository validation and diff checks, then update draft PR #4 and
+   confirm its checks.
+
 ## Current Status
 
-Tasks 1.0 through 4.0 are implemented and validated. Draft PR #4 is open and
-linked to bug report #3; the complete GitHub Actions matrix passes.
+Tasks 1.0 through 4.4 are implemented and validated. Task 4.5 is in progress.
+Draft PR #4 is open and linked to bug report #3.
 
 ## Acceptance Criteria Verification
 

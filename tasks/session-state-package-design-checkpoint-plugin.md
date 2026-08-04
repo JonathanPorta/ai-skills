@@ -4,11 +4,12 @@ Last updated: 2026-08-04T12:31:00Z
 ### Current Position
 
 - **Validation Review Mode:** auto-proceed
-- **Current Phase:** Human review
-- **Working on:** Owner review of draft PR #4
-- **Status:** Issue #3 and draft PR #4 are open. Task 4.4 corrected the macOS
-  case-insensitive-filesystem fixture, and GitHub Actions run `30909011909`
-  passes the Open Design contract plus Ubuntu/macOS on Python 3.10 and 3.14.
+- **Current Phase:** Visual refinement
+- **Working on:** Task 4.5 paired checkpoint/handoff icon semantics
+- **Status:** Issue #3 and draft PR #4 are open. The owner approved retaining
+  the checkpoint icon exactly and deriving the handoff icon from it by removing
+  the coral status dot and closing the mint package frame without moving the
+  amber inner shape.
 - **Blocked:** No. The owner explicitly authorized a normal feature-branch push,
   pull-request creation, and a related issue in this session.
 
@@ -23,6 +24,9 @@ Last updated: 2026-08-04T12:31:00Z
   separate and never used to infer identity.
 - Checkpoint and handoff archives have independent filename/version streams.
 - Checkpoints do not generate final implementation-handoff artifacts.
+- The checkpoint icon remains the open package with a coral status dot; the
+  handoff icon uses the same background, palette, and geometry but closes the
+  package frame and omits the dot.
 
 ### Codebase Understanding
 
@@ -37,9 +41,10 @@ Last updated: 2026-08-04T12:31:00Z
 
 ### What's Next
 
-1. Owner reviews draft PR #4 and confirms the acceptance criteria.
-2. After owner sign-off, delete this transient session-state file before merge.
-3. After merge, re-import each Open Design plugin to refresh its install-time
+1. Complete Task 4.5, publish it to draft PR #4, and confirm the PR checks.
+2. Owner reviews draft PR #4 and confirms the acceptance criteria.
+3. After owner sign-off, delete this transient session-state file before merge.
+4. After merge, re-import each Open Design plugin to refresh its install-time
    local copy.
 
 ### Blockers / Open Questions
