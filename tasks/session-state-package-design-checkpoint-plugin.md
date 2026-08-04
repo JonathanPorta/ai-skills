@@ -1,14 +1,14 @@
 # Session State: package-design-checkpoint-plugin
-Last updated: 2026-08-04T12:28:00Z
+Last updated: 2026-08-04T12:31:00Z
 
 ### Current Position
 
 - **Validation Review Mode:** auto-proceed
-- **Current Phase:** Validation follow-up
-- **Working on:** Task 4.4 — portable case-variant dependency test fixtures
-- **Status:** Issue #3 and draft PR #4 are open. Ubuntu and Open Design jobs pass;
-  both macOS jobs fail before exercising the helpers because the fixture creates
-  `node_modules` and then `NODE_MODULES` on a case-insensitive filesystem.
+- **Current Phase:** Human review
+- **Working on:** Owner review of draft PR #4
+- **Status:** Issue #3 and draft PR #4 are open. Task 4.4 corrected the macOS
+  case-insensitive-filesystem fixture, and GitHub Actions run `30909011909`
+  passes the Open Design contract plus Ubuntu/macOS on Python 3.10 and 3.14.
 - **Blocked:** No. The owner explicitly authorized a normal feature-branch push,
   pull-request creation, and a related issue in this session.
 
@@ -37,10 +37,10 @@ Last updated: 2026-08-04T12:28:00Z
 
 ### What's Next
 
-1. Make the two case-variant dependency fixtures portable on macOS.
-2. Re-run local validation and publish the focused correction to PR #4.
-3. Confirm the complete GitHub Actions matrix passes.
-4. After owner sign-off/merge, delete this transient session-state file.
+1. Owner reviews draft PR #4 and confirms the acceptance criteria.
+2. After owner sign-off, delete this transient session-state file before merge.
+3. After merge, re-import each Open Design plugin to refresh its install-time
+   local copy.
 
 ### Blockers / Open Questions
 

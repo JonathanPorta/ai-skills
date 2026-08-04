@@ -75,13 +75,13 @@
       first-class plugin.
     - No unsupported desktop `od` command is recommended.
 
-- [ ] 4.0 Validate the integrated change <!-- Serves: AC-8, AC-10 -->
+- [x] 4.0 Validate the integrated change <!-- Serves: AC-8, AC-10 -->
   - [x] 4.1 Extend sidecar validation and negative tests.
   - [x] 4.2 Exercise plugin-local loading and companion-script staging for both
     skills against current pinned Open Design source.
   - [x] 4.3 Run the full suite, inspect the diff, reconcile every acceptance
     criterion, and prepare one feature commit plus PR text.
-  - [ ] 4.4 Make the case-variant dependency fixtures portable to
+  - [x] 4.4 Make the case-variant dependency fixtures portable to
     case-insensitive macOS filesystems and re-run the PR matrix.
   - **Validates when:**
     - `make check` exits zero.
@@ -133,9 +133,8 @@
 
 ## Current Status
 
-Tasks 1.0 through 3.0 are complete. Task 4.4 is correcting a macOS
-case-insensitive-filesystem fixture failure discovered by PR validation; the
-packaging implementation and Open Design contract jobs pass.
+Tasks 1.0 through 4.0 are implemented and validated. Draft PR #4 is open and
+linked to bug report #3; the complete GitHub Actions matrix passes.
 
 ## Acceptance Criteria Verification
 
@@ -160,6 +159,8 @@ packaging implementation and Open Design contract jobs pass.
   — one production-contract integration passed at exact revision
   `fe1231eed69a2312e56c4e155e06781981fff068`.
 - `git diff --check` — passed.
+- GitHub Actions run `30909011909` — Open Design contract plus Ubuntu/macOS on
+  Python 3.10 and 3.14 all passed.
 - Final adversarial review — prior credential, case-variant exclusion, mockup
   completeness, label association, `srcset`, and URL-encoding findings closed.
 
@@ -173,9 +174,9 @@ packaging implementation and Open Design contract jobs pass.
   re-evaluate when the upstream capability model changes.
 - **Info:** Direct Codex execution of the new checkpoint skill is conservatively
   labeled format-compatible until a separate harness-forward test is added.
-- **Operational:** Checked-in Rule 9 now permits the requested normal
-  feature-branch push and pull-request creation after explicit current-session
-  authorization. It does not authorize merge or a direct push to `main`.
+- **Operational:** The explicitly authorized feature branch, issue #3, and draft
+  PR #4 are published. Rule 9 still does not authorize merge or a direct push
+  to `main`.
 
 ## Follow-Up Items
 
