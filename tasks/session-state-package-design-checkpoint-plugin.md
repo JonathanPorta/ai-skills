@@ -1,16 +1,16 @@
 # Session State: package-design-checkpoint-plugin
-Last updated: 2026-08-04T19:06:44Z
+Last updated: 2026-08-04T19:11:12Z
 
 ### Current Position
 
 - **Validation Review Mode:** auto-proceed
-- **Current Phase:** Exact-head review follow-up
-- **Working on:** Task 4.7 — durable ratification binding and spelled positions
+- **Current Phase:** Exact-head owner review
+- **Working on:** Confirming final PR #4 review status
 - **Status:** [PR comment
   `5183292830`](https://github.com/JonathanPorta/ai-skills/pull/4#issuecomment-5183292830)
   is the owner-authored approval record for AC-1 through AC-10. F1 and F3 are
-  implemented with focused and complete local gates green; publication and
-  exact-head hosted checks remain.
+  implemented; focused, complete local, pinned Open Design, and exact-head
+  hosted gates are green on PR head `b5e49a1`.
 - **Blocked:** No. The owner explicitly authorized a normal feature-branch push,
   pull-request creation, and a related issue in this session.
 
@@ -45,12 +45,10 @@ Last updated: 2026-08-04T19:06:44Z
 
 ### What's Next
 
-1. Publish the Task 4.7 exact-head review follow-up to PR #4.
-2. Confirm the hosted matrix and fresh exact-head review pass, then reconcile
-   Task 4.7's publication state.
-3. Owner reviews PR #4 and confirms final acceptance.
-4. After owner sign-off, delete this transient session-state file before merge.
-5. After merge, re-import each Open Design plugin to refresh its install-time
+1. Confirm the fresh exact-head review has no remaining finding.
+2. Owner reviews PR #4 and confirms final acceptance.
+3. After owner sign-off, delete this transient session-state file before merge.
+4. After merge, re-import each Open Design plugin to refresh its install-time
    local copy.
 
 ### Blockers / Open Questions

@@ -123,12 +123,12 @@
     - Generic positional labels fail and descriptive state/role labels pass.
     - Local checks, the pinned Open Design contract, and hosted PR checks pass.
 
-- [ ] 4.7 Close exact-head scope and spelled-position review findings <!-- Serves: AC-1 through AC-10 -->
+- [x] 4.7 Close exact-head scope and spelled-position review findings <!-- Serves: AC-1 through AC-10 -->
   - [x] 4.7.1 Bind AC-1 through AC-10 to the owner's durable ratification
     comment `5183292830` and remove self-ratifying authority claims.
   - [x] 4.7.2 Reject role-only spelled cardinal and ordinal positions while
     preserving genuinely descriptive target labels.
-  - [ ] 4.7.3 Run focused production-CLI regressions, the complete local
+  - [x] 4.7.3 Run focused production-CLI regressions, the complete local
     validation surface, independent phase-gate review, and hosted PR checks.
   - **Validates when:**
     - The PRD links the exact owner-authored comment that approves the complete
@@ -257,10 +257,10 @@
 
 ## Current Status
 
-Tasks 1.0 through 4.6 are implemented and validated. Task 4.7's ratification
-binding, classifier change, production regressions, complete local suite, and
-independent phase-gate reviews pass. Publication and exact-head hosted checks
-remain. PR #4 remains open and linked to bug report #3.
+Tasks 1.0 through 4.7 are implemented and validated. Task 4.7's ratification
+binding, classifier change, production regressions, complete local suite,
+independent phase-gate reviews, and exact-head hosted matrix all pass. PR #4
+remains open and linked to bug report #3; fresh owner review remains.
 
 ## Acceptance Criteria Verification
 
@@ -304,8 +304,8 @@ remain. PR #4 remains open and linked to bug report #3.
   in the dry-run plan without publishing a ZIP.
 - Task 4.7 independent phase gates — ratification binding and spelled-position
   behavior both passed with no publication blocker.
-- Final GitHub Actions matrix for Task 4.7 — pending publication of this exact
-  reviewed tree.
+- GitHub Actions run `30941988640` — Task 4.7's Open Design contract plus
+  Ubuntu/macOS on Python 3.10 and 3.14 all passed on head `b5e49a1`.
 
 ## Reconciliation Audit
 
