@@ -243,6 +243,18 @@ class PackageCheckpointTests(unittest.TestCase):
                 ("--alternative", "notes.md", "Option A"),
                 "functional label",
             ),
+            (
+                ("--alternative", "notes.md", "Option One"),
+                "functional label",
+            ),
+            (
+                ("--alternative", "notes.md", "Alternative First"),
+                "functional label",
+            ),
+            (
+                ("--alternative", "notes.md", "Variant Two"),
+                "functional label",
+            ),
         )
         for arguments, message in controls:
             with self.subTest(arguments=arguments):
@@ -329,6 +341,17 @@ class PackageCheckpointTests(unittest.TestCase):
             "Option MM",
             "Option ＭＭ",
             "Variant MMMCMXCIX",
+            "Option One",
+            "OptionOne",
+            "Alternative First",
+            "Variant Two",
+            "Direction Second",
+            "Primary Zero",
+            "Option Twenty One",
+            "Alternative Twenty-First",
+            "Variant One Hundred",
+            "Direction One Hundred and First",
+            "Ｖａｒｉａｎｔ Ｔｗｏ",
         )
         for label in generic_labels:
             with self.subTest(label=label):
@@ -358,6 +381,10 @@ class PackageCheckpointTests(unittest.TestCase):
             "Variant 3rd-pass comparison",
             "State 404th error recovery",
             "Option first-pass review",
+            "Option one-handed navigation",
+            "Direction first responder workflow",
+            "State two-column comparison",
+            "Variant one hundred percent width",
             "Variant ＸＬ breakpoint",
             "Option Ⓐ accessibility review",
         )
@@ -367,6 +394,28 @@ class PackageCheckpointTests(unittest.TestCase):
                     PACKAGE.functional_label(label, "mockups/review.html"),
                     label,
                 )
+
+    def test_descriptive_label_passes_through_production_dry_run(self) -> None:
+        label = "Option optimized for keyboard navigation"
+        with tempfile.TemporaryDirectory() as temporary:
+            project = self.make_project(Path(temporary))
+
+            result = self.run_packager(
+                project,
+                "--alternative",
+                "notes.md",
+                label,
+                "--dry-run",
+            )
+            plan = json.loads(result.stdout)
+
+            self.assertIn(
+                {"path": "notes.md", "label": label},
+                plan["alternatives"],
+            )
+            self.assertFalse(
+                (project / "actual-opendesign-project-checkpoint-0.1.0.zip").exists()
+            )
 
     def test_existing_index_must_name_labels_and_resolve_every_local_target(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -123,6 +123,21 @@
     - Generic positional labels fail and descriptive state/role labels pass.
     - Local checks, the pinned Open Design contract, and hosted PR checks pass.
 
+- [ ] 4.7 Close exact-head scope and spelled-position review findings <!-- Serves: AC-1 through AC-10 -->
+  - [x] 4.7.1 Bind AC-1 through AC-10 to the owner's durable ratification
+    comment `5183292830` and remove self-ratifying authority claims.
+  - [x] 4.7.2 Reject role-only spelled cardinal and ordinal positions while
+    preserving genuinely descriptive target labels.
+  - [ ] 4.7.3 Run focused production-CLI regressions, the complete local
+    validation surface, independent phase-gate review, and hosted PR checks.
+  - **Validates when:**
+    - The PRD links the exact owner-authored comment that approves the complete
+      checkpoint contract and AC-1 through AC-10.
+    - Production dry-runs reject `Option One`, `Alternative First`, and
+      `Variant Two` but accept descriptive controls.
+    - `make check`, pinned Open Design integration, `git diff --check`, and the
+      hosted matrix pass on the published head.
+
 ### Task 1.0 Preflight
 
 - Validation plan written: yes
@@ -213,12 +228,39 @@
 5. Update PR #4 by normal fast-forward only and require its complete hosted
    matrix to pass.
 
+### Task 4.7 Exact-Head Review Preflight
+
+- Validation plan written: yes
+- Validation plan saved in artifact: yes
+- Validation review mode: auto-proceed; the owner requested all remaining
+  review fixes and explicitly authorized updating PR #4.
+- Canonical command surface identified: yes (`make check`,
+  `make integration-open-design`, focused production-CLI controls,
+  `git diff --check`, and hosted PR checks)
+- Acceptance criteria served by this task listed: yes (AC-1 through AC-10)
+- Latest exact-head review, owner ratification comment, current classifier,
+  tests, PRD, task state, and current Rule 9 re-read before modification: yes
+
+**Pre-implementation validation plan:**
+
+1. Add production-level negative controls for spelled cardinal/ordinal
+   role-only labels and positive controls for descriptive labels.
+2. Run the focused tests before implementation and confirm they fail only on
+   the missing spelled-position behavior.
+3. Implement a bounded deterministic word-position classifier, link the exact
+   owner-ratification comment from the PRD, and reconcile PR wording/state.
+4. Run focused tests, `make check`, pinned Open Design integration,
+   `git diff --check`, sensitive-data inspection, and independent phase-gate
+   review.
+5. Push PR #4 normally, update its description, and require the complete hosted
+   matrix and fresh exact-head review to pass.
+
 ## Current Status
 
-Tasks 1.0 through 4.6 are implemented and locally validated. Task 4.6 corrects
-the handoff icon and addresses PR-review findings F1 through F3. PR #4 remains
-open and linked to bug report #3; its updated hosted matrix is the publication
-gate.
+Tasks 1.0 through 4.6 are implemented and validated. Task 4.7's ratification
+binding, classifier change, production regressions, complete local suite, and
+independent phase-gate reviews pass. Publication and exact-head hosted checks
+remain. PR #4 remains open and linked to bug report #3.
 
 ## Acceptance Criteria Verification
 
@@ -237,7 +279,7 @@ gate.
 
 ## Validation Results
 
-- `make check` — 58 tests passed; one opt-in integration test skipped by the
+- `make check` — 59 tests passed; one opt-in integration test skipped by the
   default suite as designed.
 - `make integration-open-design OPEN_DESIGN_REPO=/workspace/scratch/0b3846b623e4/open-design-current`
   — one production-contract integration passed at exact revision
@@ -255,7 +297,14 @@ gate.
   controls; the functional-label classifier passed exhaustive canonical Roman
   1–3999 checks plus Unicode, compatibility, ordinal, and descriptive controls;
   neither gate retained a blocker, major, or minor finding.
-- Final GitHub Actions matrix for Task 4.6 — pending publication of this exact
+- GitHub Actions run `30917223702` — Task 4.6's Open Design contract plus
+  Ubuntu/macOS on Python 3.10 and 3.14 all passed on head `ea7769a3`.
+- Task 4.7 focused production-CLI controls — `Option One`, `Alternative First`,
+  and `Variant Two` fail; `Option optimized for keyboard navigation` succeeds
+  in the dry-run plan without publishing a ZIP.
+- Task 4.7 independent phase gates — ratification binding and spelled-position
+  behavior both passed with no publication blocker.
+- Final GitHub Actions matrix for Task 4.7 — pending publication of this exact
   reviewed tree.
 
 ## Reconciliation Audit

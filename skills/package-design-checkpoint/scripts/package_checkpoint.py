@@ -172,6 +172,75 @@ GENERIC_ROMAN_POSITION = re.compile(
     r"(?=[IVXLCDM]+$)M{0,3}(?:CM|CD|D?C{0,3})"
     r"(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})"
 )
+GENERIC_POSITION_WORDS = {
+    "and",
+    "billion",
+    "billionth",
+    "eight",
+    "eighteen",
+    "eighteenth",
+    "eighth",
+    "eightieth",
+    "eighty",
+    "eleven",
+    "eleventh",
+    "fifteen",
+    "fifteenth",
+    "fifth",
+    "fifty",
+    "fiftieth",
+    "first",
+    "five",
+    "fortieth",
+    "forty",
+    "four",
+    "fourteen",
+    "fourteenth",
+    "fourth",
+    "hundred",
+    "hundredth",
+    "million",
+    "millionth",
+    "nine",
+    "nineteen",
+    "nineteenth",
+    "ninetieth",
+    "ninety",
+    "ninth",
+    "one",
+    "second",
+    "seven",
+    "seventeen",
+    "seventeenth",
+    "seventh",
+    "seventieth",
+    "seventy",
+    "six",
+    "sixteen",
+    "sixteenth",
+    "sixth",
+    "sixtieth",
+    "sixty",
+    "ten",
+    "tenth",
+    "third",
+    "thirteen",
+    "thirteenth",
+    "thirty",
+    "thirtieth",
+    "thousand",
+    "thousandth",
+    "three",
+    "trillion",
+    "trillionth",
+    "twelve",
+    "twelfth",
+    "twentieth",
+    "twenty",
+    "two",
+    "zero",
+    "zeroth",
+}
 
 
 @dataclass(frozen=True, order=True)
@@ -756,6 +825,8 @@ def functional_label(value: str, target: str) -> str:
 
     def positional_marker(token: str) -> bool:
         folded_token = token.casefold()
+        if folded_token in GENERIC_POSITION_WORDS:
+            return True
         numeric_ordinal_position = any(
             folded_token.endswith(suffix)
             and folded_token[: -len(suffix)].isdecimal()

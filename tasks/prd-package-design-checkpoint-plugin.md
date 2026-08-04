@@ -70,11 +70,11 @@ delivery.
 
 ### Owner-Confirmed Requirements
 
-These requirements were supplied and explicitly ratified by JonathanPorta in
-the interactive owner session on 2026-08-04. The
-[PR #4 owner-ratified scope](https://github.com/JonathanPorta/ai-skills/pull/4#owner-ratified-scope)
-is the durable review record for that decision; branch-authored planning
-artifacts are implementation traceability, not the source of authority.
+JonathanPorta explicitly ratified the checkpoint/handoff product contract and
+AC-1 through AC-10 in [PR comment
+5183292830](https://github.com/JonathanPorta/ai-skills/pull/4#issuecomment-5183292830).
+That owner-authored, off-branch comment is the decision authority; this PRD and
+the other branch-authored artifacts provide implementation traceability only.
 
 - Name the pair `package-design-checkpoint` and `package-design-handoff`.
 - Use `/checkpoint` and `/handoff` as shorthand while accurately documenting
@@ -93,13 +93,18 @@ artifacts are implementation traceability, not the source of authority.
 - Do not generate an implementation specification, exhaustive component
   inventory, internal checksum manifest, CI/CD evidence, or full implementation
   handoff from the checkpoint workflow.
+
+### Additional Owner-Directed PR Requirements
+
+The owner separately supplied these requirements during implementation:
+
 - Add the supplied Open Design screenshots to the documentation where useful.
 - Use paired icon semantics: checkpoint remains an open mint package with the
   amber partial package and coral status dot; handoff is the same composition
   with the amber geometry unmoved, the dot removed, and the mint package closed
   as a visually complete, uniformly weighted square.
 
-### Implementation Choices for Owner Review
+### Implementation Choices Within the Ratified Scope
 
 - Checkpoints use `<project-slug>-checkpoint-X.Y.Z.zip`; final handoffs retain
   `<project-slug>-X.Y.Z.zip`, so their version streams cannot affect each other.
@@ -169,6 +174,10 @@ implementation documentation or claiming that delivery is complete.
 
 ## Acceptance Criteria
 
+AC-1 through AC-10 below are the implementation-level expression of, and are
+bounded by, the owner-approved contract in [comment
+5183292830](https://github.com/JonathanPorta/ai-skills/pull/4#issuecomment-5183292830).
+
 - [x] AC-1: `skills/package-design-checkpoint/` is independently importable and
   contains `SKILL.md`, README, OpenAI metadata, icon, `open-design.json`, and an
   executable standard-library Python helper.
@@ -204,7 +213,7 @@ implementation documentation or claiming that delivery is complete.
 
 ## Open Questions
 
-- Owner acceptance of the implementation choices is represented by pull-request
-  review and merge; no unchecked assumption is treated as previously approved.
+- The owner comment ratifies the product scope and AC-1 through AC-10. Pull-
+  request review and merge remain the final implementation-acceptance steps.
 - Publication is limited to the explicitly authorized feature-branch push,
   pull-request creation, and related issue; merge remains an owner action.
