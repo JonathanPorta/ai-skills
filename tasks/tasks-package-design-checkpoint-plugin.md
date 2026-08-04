@@ -90,13 +90,13 @@
     - `git diff --check` exits zero.
     - Ubuntu and macOS matrix jobs pass for Python 3.10 and 3.14.
 
-- [ ] 4.5 Align the paired plugin icon semantics <!-- Serves: AC-1, AC-7 -->
-  - [ ] 4.5.1 Preserve the checkpoint SVG byte-for-byte.
-  - [ ] 4.5.2 Derive the handoff SVG from the checkpoint composition: retain
+- [x] 4.5 Align the paired plugin icon semantics <!-- Serves: AC-1, AC-7 -->
+  - [x] 4.5.1 Preserve the checkpoint SVG byte-for-byte.
+  - [x] 4.5.2 Derive the handoff SVG from the checkpoint composition: retain
     the navy background, mint frame, and unmoved amber inner shape; remove the
     coral dot; close the frame's right side with aligned mint geometry.
-  - [ ] 4.5.3 Render both SVGs side by side and at small sizes, validate the
-    SVG resources, and publish the focused update to draft PR #4.
+  - [x] 4.5.3 Render both SVGs side by side and at small sizes, validate the
+    SVG resources, and publish the focused update to PR #4.
   - **Validates when:**
     - The checkpoint asset checksum is unchanged.
     - The handoff asset shares the checkpoint view box, background, mint/yellow
@@ -163,13 +163,13 @@
 2. Apply only the approved semantic delta to the handoff SVG.
 3. Render the pair together and at small size; inspect alignment, color,
    closure, and legibility.
-4. Run repository validation and diff checks, then update draft PR #4 and
+4. Run repository validation and diff checks, then update PR #4 and
    confirm its checks.
 
 ## Current Status
 
-Tasks 1.0 through 4.4 are implemented and validated. Task 4.5 is in progress.
-Draft PR #4 is open and linked to bug report #3.
+Tasks 1.0 through 4.5 are implemented and validated. PR #4 is open and linked
+to bug report #3.
 
 ## Acceptance Criteria Verification
 
@@ -196,6 +196,11 @@ Draft PR #4 is open and linked to bug report #3.
 - `git diff --check` — passed.
 - GitHub Actions run `30909011909` — Open Design contract plus Ubuntu/macOS on
   Python 3.10 and 3.14 all passed.
+- GitHub Actions run `30910687979` — the paired-icon commit passed the Open
+  Design contract plus Ubuntu/macOS on Python 3.10 and 3.14.
+- Paired-icon visual review — checkpoint SHA-256 remained
+  `a676e7eb109b66cf0b1f2a191100b35e497abcdbbb3dd01c4f590989b0a877ba`;
+  both native and 32 px renders passed with no blocker, major, or minor finding.
 - Final adversarial review — prior credential, case-variant exclusion, mockup
   completeness, label association, `srcset`, and URL-encoding findings closed.
 
