@@ -70,6 +70,12 @@ delivery.
 
 ### Owner-Confirmed Requirements
 
+These requirements were supplied and explicitly ratified by JonathanPorta in
+the interactive owner session on 2026-08-04. The
+[PR #4 owner-ratified scope](https://github.com/JonathanPorta/ai-skills/pull/4#owner-ratified-scope)
+is the durable review record for that decision; branch-authored planning
+artifacts are implementation traceability, not the source of authority.
+
 - Name the pair `package-design-checkpoint` and `package-design-handoff`.
 - Use `/checkpoint` and `/handoff` as shorthand while accurately documenting
   that Open Design runs them as plugins, not native slash commands.
@@ -88,6 +94,10 @@ delivery.
   inventory, internal checksum manifest, CI/CD evidence, or full implementation
   handoff from the checkpoint workflow.
 - Add the supplied Open Design screenshots to the documentation where useful.
+- Use paired icon semantics: checkpoint remains an open mint package with the
+  amber partial package and coral status dot; handoff is the same composition
+  with the amber geometry unmoved, the dot removed, and the mint package closed
+  as a visually complete, uniformly weighted square.
 
 ### Implementation Choices for Owner Review
 

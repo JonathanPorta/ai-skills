@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from xml.etree import ElementTree
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +78,31 @@ class SkillValidatorTests(unittest.TestCase):
             repository, _skill = self.make_repository(Path(temporary))
             result = self.validate(repository)
             self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_paired_icons_keep_checkpoint_open_and_handoff_uniformly_closed(self) -> None:
+        checkpoint_file = ROOT / "skills/package-design-checkpoint/assets/icon.svg"
+        handoff_file = ROOT / "skills/package-design-handoff/assets/icon.svg"
+        checkpoint = ElementTree.parse(checkpoint_file).getroot()
+        handoff = ElementTree.parse(handoff_file).getroot()
+
+        self.assertEqual(checkpoint.attrib["viewBox"], "0 0 128 128")
+        self.assertEqual(handoff.attrib["viewBox"], checkpoint.attrib["viewBox"])
+
+        checkpoint_paths = [element.attrib for element in checkpoint if element.tag.endswith("path")]
+        handoff_paths = [element.attrib for element in handoff if element.tag.endswith("path")]
+        amber = {"d": "M56 55h38v14H70v16H56z", "fill": "#f5c96a"}
+        mint_ring = {
+            "d": "M34 29h74v70H34zM48 43v42h46V43z",
+            "fill": "#8ad8c8",
+            "fill-rule": "evenodd",
+            "clip-rule": "evenodd",
+        }
+
+        self.assertIn(amber, checkpoint_paths)
+        self.assertIn(amber, handoff_paths)
+        self.assertIn(mint_ring, handoff_paths)
+        self.assertTrue(any(element.tag.endswith("circle") for element in checkpoint))
+        self.assertFalse(any(element.tag.endswith("circle") for element in handoff))
 
     def test_agent_skill_field_limits_are_enforced(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

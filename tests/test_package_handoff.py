@@ -153,6 +153,174 @@ class PackageHandoffTests(unittest.TestCase):
                     ["config/credentials.json"],
                 )
 
+    def test_common_credential_filename_forms_fail_closed(self) -> None:
+        sensitive_names = (
+            "token",
+            "api-token.txt",
+            "github_token.txt",
+            "password.txt",
+            "PASSWORD.conf",
+            "db-password.cfg",
+            "db_password.ini",
+            "secret",
+            "CLIENT-SECRET.config",
+            "client_secret.properties",
+            "auth",
+            "DEPLOY-AUTH.env",
+            "deploy_auth.cnf",
+            "credential",
+            "USER-CREDENTIAL.txt",
+            "user_credentials.conf",
+            ".token",
+            "api.token.txt",
+            "api_token.env.local",
+            "token.txt.bak",
+            "credentials.csv",
+            "client-secret.plist",
+            "passwords.txt",
+            "GitHubToken.txt",
+            "clientSecret.json",
+            "AWSCredentials.ini",
+            "API Token.txt",
+            "credentials~",
+            "token~",
+            "github-token (backup).txt",
+            "githubtoken.txt",
+            "clientsecret.json",
+            "awscredentials.ini",
+            "dbpassword.txt",
+            "apitoken.txt",
+            "serviceAccount.json",
+            "ServiceAccount.yml",
+            "apiToken2.txt",
+            "token2026.txt",
+            "passwords2026.txt",
+            "tokenprod.txt",
+            "passwordbackup.txt",
+            "secretcopy.txt",
+            "authlocal.ini",
+            "credentialold.json",
+            "serviceaccount2.json",
+            "serviceAccount2.json",
+            "serviceaccountbackup.json",
+            "apikey.json",
+            "accesskey.txt",
+            "awsaccesskey.txt",
+            "openaiapikey.txt",
+            "password.md",
+            "credentials.markdown",
+            "client-secret.rst",
+            "auth.log",
+            "api-token.md",
+            "githubtoken.md",
+            "private-key.json",
+            "private_key.yaml",
+            "private.key.toml",
+            "privateKey.txt",
+            "privatekey.md",
+            "signing-key.json",
+            "signing_key.yaml",
+            "signing.key.toml",
+            "signingKey.txt",
+            "signingkey.md",
+            "api-token.txt.backup2",
+            "api-token.txt.bak1",
+            "api-token.txt.backup-copy",
+            "api-token.txt.backup_copy",
+            "credentials.json.old3",
+            "ｐａｓｓｗｏｒｄ.md",
+        )
+        for relative_path in sensitive_names:
+            with self.subTest(relative_path=relative_path):
+                with tempfile.TemporaryDirectory() as temporary:
+                    project = self.make_project(Path(temporary))
+                    (project / relative_path).write_text(
+                        "do-not-ship\n", encoding="utf-8"
+                    )
+
+                    result = self.run_packager(project, expect_success=False)
+
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn("credential-like", result.stderr)
+                    self.assertFalse((project / "sample-design-0.1.0.zip").exists())
+
+    def test_common_credential_filename_preserves_exact_controls(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = self.make_project(Path(temporary))
+            sensitive = project / "api-token.txt"
+            sensitive.write_text("do-not-ship\n", encoding="utf-8")
+
+            self.run_packager(project, "--exclude", "api-token.txt")
+
+            with zipfile.ZipFile(project / "sample-design-0.1.0.zip") as archive:
+                self.assertNotIn("api-token.txt", archive.namelist())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            project = self.make_project(Path(temporary))
+            reviewed = project / "github_token.txt"
+            reviewed.write_text("public training fixture\n", encoding="utf-8")
+
+            self.run_packager(
+                project,
+                "--include-sensitive",
+                "github_token.txt",
+            )
+
+            with zipfile.ZipFile(project / "sample-design-0.1.0.zip") as archive:
+                self.assertIn("github_token.txt", archive.namelist())
+                manifest = json.loads(archive.read("_handoff/MANIFEST.json"))
+                self.assertEqual(
+                    manifest["reviewed_sensitive_inclusions"],
+                    ["github_token.txt"],
+                )
+
+    def test_bounded_noncredential_filename_words_remain_allowed(self) -> None:
+        safe_names = (
+            "authorization.txt",
+            "secretary.txt",
+            "tokenizer.txt",
+            "design-tokens.json",
+            "authentication-flow.txt",
+            "OAuthFlow.md",
+            "OAuthClient.ts",
+            "GitHubOAuthCallback.html",
+            "AuthClient.ts",
+            "auth.js",
+            "TokenStore.ts",
+            "CredentialForm.tsx",
+            "PasswordField.vue",
+            "SecretEditor.py",
+            "serviceAccount.ts",
+            "ApiKeyInput.tsx",
+            "AccessKeyIcon.svg",
+            "DesignToken.ts",
+            "SecretIcon.svg",
+            "PasswordField.svg",
+            "auth-screen.html",
+            "PasswordField.md",
+            "SecretEditor.md",
+            "AuthFlow.md",
+            "api-token-guide.md",
+            "PrivateKeyParser.ts",
+            "SigningKeyIcon.svg",
+            "private-key-guide.md",
+            "signing-key-help.rst",
+            "PrivateKeyField.md",
+            "private-key-screen.html",
+            "ＰａｓｓｗｏｒｄＳｕｍｍａｒｙ.md",
+            "api-token-guide.md.backup-copy",
+            "PasswordField.md.backup_copy",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            project = self.make_project(Path(temporary))
+            for name in safe_names:
+                (project / name).write_text("safe design content\n", encoding="utf-8")
+
+            self.run_packager(project)
+
+            with zipfile.ZipFile(project / "sample-design-0.1.0.zip") as archive:
+                self.assertTrue(set(safe_names).issubset(archive.namelist()))
+
     def test_sensitive_file_globs_do_not_count_as_exact_review(self) -> None:
         controls = (
             ("--exclude", "*.npmrc"),

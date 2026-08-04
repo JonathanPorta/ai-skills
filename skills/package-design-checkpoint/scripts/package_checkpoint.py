@@ -74,6 +74,70 @@ SENSITIVE_EXACT_NAMES = {
     "token.json",
 }
 SENSITIVE_SUFFIXES = (".key", ".p12", ".pfx", ".pem")
+COMMON_CREDENTIAL_STEMS = {
+    "auth",
+    "credential",
+    "credentials",
+    "password",
+    "passwords",
+    "secret",
+    "secrets",
+    "token",
+}
+COMMON_CREDENTIAL_COMPOUNDS = {
+    "accesskey",
+    "apikey",
+    "privatekey",
+    "serviceaccount",
+    "signingkey",
+}
+COMMON_CREDENTIAL_SEQUENCES = {
+    ("access", "key"),
+    ("api", "key"),
+    ("private", "key"),
+    ("service", "account"),
+    ("signing", "key"),
+}
+COMMON_CREDENTIAL_QUALIFIERS = {
+    "bak",
+    "backup",
+    "copy",
+    "dev",
+    "development",
+    "example",
+    "local",
+    "old",
+    "orig",
+    "original",
+    "prod",
+    "production",
+    "sample",
+    "stage",
+    "staging",
+    "test",
+}
+# Generalized name heuristics intentionally stop at text/config artifacts.
+# Authored code, HTML mockups, and media remain normal package payload.
+COMMON_CREDENTIAL_TEXT_CONFIG_SUFFIXES = {
+    "cfg",
+    "cnf",
+    "conf",
+    "config",
+    "csv",
+    "env",
+    "ini",
+    "json",
+    "plist",
+    "properties",
+    "text",
+    "toml",
+    "tsv",
+    "txt",
+    "xml",
+    "yaml",
+    "yml",
+}
+COMMON_CREDENTIAL_DOC_SUFFIXES = {"log", "markdown", "md", "rst"}
 SENSITIVE_PATH_SUFFIXES = {
     (".aws", "credentials"),
     (".cargo", "credentials"),
@@ -93,10 +157,20 @@ WINDOWS_RESERVED_COMPONENTS = {
     *(f"com{number}" for number in range(1, 10)),
     *(f"lpt{number}" for number in range(1, 10)),
 }
-GENERIC_LABEL = re.compile(
-    r"(?:alternative|alternate|direction|mockup|option|variant|screen|state)"
-    r"(?:\s*[-#:]?\s*\d+)?",
-    re.IGNORECASE,
+GENERIC_ROLES = {
+    "alternate",
+    "alternative",
+    "direction",
+    "mockup",
+    "option",
+    "primary",
+    "screen",
+    "state",
+    "variant",
+}
+GENERIC_ROMAN_POSITION = re.compile(
+    r"(?=[IVXLCDM]+$)M{0,3}(?:CM|CD|D?C{0,3})"
+    r"(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})"
 )
 
 
@@ -287,11 +361,127 @@ def exact_exclusion_paths(patterns: list[str]) -> set[str]:
 
 def credential_like_path(relative_path: str) -> bool:
     path = PurePosixPath(relative_path)
-    parts = tuple(part.casefold() for part in path.parts)
+    parts = tuple(unicodedata.normalize("NFKC", part).casefold() for part in path.parts)
+    raw_name = unicodedata.normalize("NFKC", path.name)
     name = parts[-1]
     normalized_name = name.replace("_", "-")
     structured_suffixes = (".json", ".yaml", ".yml", ".toml")
     structured_stem = normalized_name.rsplit(".", 1)[0]
+    ordered_qualifiers = sorted(
+        COMMON_CREDENTIAL_QUALIFIERS, key=len, reverse=True
+    )
+
+    def normalize_credential_token(token: str) -> str:
+        normalized = token.casefold()
+        while normalized:
+            previous = normalized
+            normalized = re.sub(r"(?:v)?\d+$", "", normalized)
+            for qualifier in ordered_qualifiers:
+                if normalized.endswith(qualifier) and len(normalized) > len(qualifier):
+                    normalized = normalized[: -len(qualifier)]
+                    break
+            if normalized == previous:
+                break
+        return normalized
+
+    def credential_name_tokens(value: str) -> list[str]:
+        camel_source = re.sub(r"oauth", "oauth", value, flags=re.IGNORECASE)
+        camel_separated = re.sub(
+            r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])",
+            " ",
+            camel_source,
+        )
+        return [
+            normalized
+            for token in re.findall(r"[^\W_]+", camel_separated)
+            if (normalized := normalize_credential_token(token))
+        ]
+
+    def credential_token(token: str) -> bool:
+        if token.endswith("oauth"):
+            return False
+        if token in COMMON_CREDENTIAL_STEMS:
+            return True
+        return any(
+            token.endswith(marker) and len(token) - len(marker) >= 2
+            for marker in COMMON_CREDENTIAL_STEMS
+        )
+
+    def credential_compound(token: str) -> bool:
+        return any(
+            token == compound
+            or (token.endswith(compound) and len(token) - len(compound) >= 2)
+            for compound in COMMON_CREDENTIAL_COMPOUNDS
+        )
+
+    def credential_tokens_match(tokens: list[str]) -> bool:
+        return (
+            any(credential_token(token) for token in tokens)
+            or any(credential_compound(token) for token in tokens)
+            or any(
+                tuple(tokens[index : index + len(sequence)]) == sequence
+                for sequence in COMMON_CREDENTIAL_SEQUENCES
+                for index in range(len(tokens) - len(sequence) + 1)
+            )
+        )
+
+    def terminal_credential_tokens_match(tokens: list[str]) -> bool:
+        effective = list(tokens)
+        while effective and effective[-1] in COMMON_CREDENTIAL_QUALIFIERS:
+            effective.pop()
+        if not effective:
+            return False
+        if credential_token(effective[-1]) or credential_compound(effective[-1]):
+            return True
+        return any(
+            len(effective) >= len(sequence)
+            and tuple(effective[-len(sequence) :]) == sequence
+            for sequence in COMMON_CREDENTIAL_SEQUENCES
+        )
+
+    def qualifier_component(value: str) -> bool:
+        normalized = re.sub(r"[^a-z0-9]+", "", value.casefold())
+        if re.fullmatch(r"v?\d+", normalized):
+            return True
+        remainder = normalized
+        while remainder:
+            remainder = re.sub(r"(?:v)?\d+$", "", remainder)
+            for qualifier in ordered_qualifiers:
+                if remainder.endswith(qualifier):
+                    remainder = remainder[: -len(qualifier)]
+                    break
+            else:
+                return False
+        return bool(normalized)
+
+    def generalized_name_context(value: str) -> tuple[str, list[str]]:
+        components = [
+            component
+            for component in value.rstrip("~").lstrip(".").split(".")
+            if component
+        ]
+        while len(components) > 1 and qualifier_component(components[-1]):
+            components.pop()
+        all_tokens = credential_name_tokens(".".join(components))
+        if len(components) <= 1:
+            return "bare", all_tokens
+        suffix = re.sub(r"[^a-z0-9]+", "", components[-1].casefold())
+        stem_tokens = credential_name_tokens(".".join(components[:-1]))
+        if suffix in COMMON_CREDENTIAL_TEXT_CONFIG_SUFFIXES:
+            return "config", stem_tokens
+        if suffix in COMMON_CREDENTIAL_DOC_SUFFIXES:
+            return "doc", stem_tokens
+        if terminal_credential_tokens_match(all_tokens):
+            return "bare", all_tokens
+        return "none", []
+
+    name_kind, scoped_tokens = generalized_name_context(raw_name)
+    common_credential_name = (
+        credential_tokens_match(scoped_tokens)
+        if name_kind == "config"
+        else name_kind in {"bare", "doc"}
+        and terminal_credential_tokens_match(scoped_tokens)
+    )
     return (
         name in SENSITIVE_EXACT_NAMES
         or name.startswith(".env.")
@@ -301,6 +491,7 @@ def credential_like_path(relative_path: str) -> bool:
             len(parts) >= len(suffix) and parts[-len(suffix) :] == suffix
             for suffix in SENSITIVE_PATH_SUFFIXES
         )
+        or common_credential_name
         or (
             name.endswith(structured_suffixes)
             and (
@@ -318,10 +509,6 @@ def credential_like_path(relative_path: str) -> bool:
                 )
             )
         )
-        or "private-key" in name
-        or "private_key" in name
-        or "signing-key" in name
-        or "signing_key" in name
     )
 
 
@@ -564,7 +751,50 @@ def functional_label(value: str, target: str) -> str:
     label = " ".join(value.split())
     if not label or len(label) > 160:
         raise ValueError("every checkpoint target needs a concise functional label")
-    if GENERIC_LABEL.fullmatch(label):
+    classification_label = unicodedata.normalize("NFKC", label)
+    label_tokens = re.findall(r"[^\W_]+", classification_label)
+
+    def positional_marker(token: str) -> bool:
+        folded_token = token.casefold()
+        numeric_ordinal_position = any(
+            folded_token.endswith(suffix)
+            and folded_token[: -len(suffix)].isdecimal()
+            for suffix in ("st", "nd", "rd", "th")
+        )
+        short_alphanumeric_position = (
+            len(token) >= 2
+            and (
+                (token[0].isalpha() and token[1:].isdecimal())
+                or (token[:-1].isdecimal() and token[-1].isalpha())
+            )
+        )
+        if (
+            token.isdecimal()
+            or (len(token) == 1 and token.isalpha())
+            or short_alphanumeric_position
+            or numeric_ordinal_position
+        ):
+            return True
+        if not (token.isupper() or token.islower()):
+            return False
+        return bool(GENERIC_ROMAN_POSITION.fullmatch(token.upper()))
+
+    def generic_role_marker(token: str) -> bool:
+        folded_token = token.casefold()
+        if folded_token in GENERIC_ROLES:
+            return True
+        return any(
+            folded_token.startswith(role) and positional_marker(token[len(role) :])
+            for role in GENERIC_ROLES
+        )
+
+    generic_position_only = bool(label_tokens) and any(
+        generic_role_marker(token) for token in label_tokens
+    ) and all(
+        generic_role_marker(token) or positional_marker(token)
+        for token in label_tokens
+    )
+    if generic_position_only:
         raise ValueError(f"'{label}' is not a functional label")
     filename_label = re.sub(r"[-_]+", " ", PurePosixPath(target).stem).casefold()
     if label.casefold() == filename_label:

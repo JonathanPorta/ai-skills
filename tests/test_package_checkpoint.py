@@ -239,6 +239,10 @@ class PackageCheckpointTests(unittest.TestCase):
                 ("--alternative", "mockups/mobile-error.html", "Alternative 1"),
                 "functional label",
             ),
+            (
+                ("--alternative", "notes.md", "Option A"),
+                "functional label",
+            ),
         )
         for arguments, message in controls:
             with self.subTest(arguments=arguments):
@@ -251,6 +255,118 @@ class PackageCheckpointTests(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode, 2)
                     self.assertIn(message, result.stderr)
+
+    def test_positional_role_only_labels_are_not_functional(self) -> None:
+        generic_labels = (
+            "Primary",
+            "Alternative",
+            "Alternate",
+            "Option",
+            "Direction",
+            "Variant",
+            "Primary 1",
+            "Alternative #2",
+            "Option: 03",
+            "Direction-4",
+            "Variant5",
+            "Primary A",
+            "Alternative b",
+            "Option #C",
+            "Direction: d",
+            "Variant-E",
+            "Primary II",
+            "Alternative III",
+            "Option IV",
+            "Direction XII",
+            "Variant-IX",
+            "Primary state",
+            "Alternative screen B",
+            "Option A.",
+            "Option A:",
+            "Option (A).",
+            "Primary:",
+            "Direction (IV)",
+            "Option A!",
+            "Option A,",
+            "Option [A]",
+            "Option {A}",
+            "Option “A”",
+            "Option A?",
+            "Option A—",
+            "OptionA",
+            "Option A1",
+            "Option 1A",
+            "OptionA1",
+            "Variant1A",
+            "Option 1st",
+            "Alternative 2nd",
+            "Direction 3rd",
+            "Variant 4th",
+            "Option 11TH",
+            "Option1st",
+            "Option Ａ",
+            "OptionＡ",
+            "Option Ａ１",
+            "Option １Ａ",
+            "Option １ｓｔ",
+            "Option Ⓐ",
+            "Option Ⓐ①",
+            "Option ①ˢᵗ",
+            "Ｏｐｔｉｏｎ Ａ",
+            "Ⓞⓟⓣⓘⓞⓝ Ⓐ",
+            "Option α",
+            "Variant ５",
+            "Variant ①",
+            "Variant ⑴",
+            "Variant ㊿",
+            "Variant ٢",
+            "Variant ٢ND",
+            "Direction Ⅳ",
+            "Direction ⅳ",
+            "Direction Ⅻ",
+            "Direction CC",
+            "Direction CXLII",
+            "Option MM",
+            "Option ＭＭ",
+            "Variant MMMCMXCIX",
+        )
+        for label in generic_labels:
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(ValueError, "not a functional label"):
+                    PACKAGE.functional_label(label, "mockups/review.html")
+
+    def test_descriptive_state_and_role_labels_are_functional(self) -> None:
+        descriptive_labels = (
+            "Primary comparison canvas",
+            "Alternative mobile validation-error state",
+            "Option optimized for keyboard navigation",
+            "Direction high-density navigation",
+            "Variant destructive-action confirmation",
+            "Mobile validation-error state",
+            "State 404 error recovery",
+            "Direction RTL layout",
+            "Variant XL breakpoint",
+            "Option Mix",
+            "Direction Civil",
+            "State DIM",
+            "Option A11y",
+            "Option B2B",
+            "Option A1 accessibility review",
+            "Option 1A mobile state",
+            "Option 1st accessibility review",
+            "Direction 2nd mobile state",
+            "Variant 3rd-pass comparison",
+            "State 404th error recovery",
+            "Option first-pass review",
+            "Variant ＸＬ breakpoint",
+            "Option Ⓐ accessibility review",
+        )
+        for label in descriptive_labels:
+            with self.subTest(label=label):
+                self.assertEqual(
+                    PACKAGE.functional_label(label, "mockups/review.html"),
+                    label,
+                )
 
     def test_existing_index_must_name_labels_and_resolve_every_local_target(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -356,6 +472,171 @@ class PackageCheckpointTests(unittest.TestCase):
                 project / "actual-opendesign-project-checkpoint-0.1.0.zip"
             ) as archive:
                 self.assertNotIn(".env", archive.namelist())
+
+    def test_common_credential_filename_forms_fail_closed(self) -> None:
+        sensitive_names = (
+            "token",
+            "api-token.txt",
+            "github_token.txt",
+            "password.txt",
+            "PASSWORD.conf",
+            "db-password.cfg",
+            "db_password.ini",
+            "secret",
+            "CLIENT-SECRET.config",
+            "client_secret.properties",
+            "auth",
+            "DEPLOY-AUTH.env",
+            "deploy_auth.cnf",
+            "credential",
+            "USER-CREDENTIAL.txt",
+            "user_credentials.conf",
+            ".token",
+            "api.token.txt",
+            "api_token.env.local",
+            "token.txt.bak",
+            "credentials.csv",
+            "client-secret.plist",
+            "passwords.txt",
+            "GitHubToken.txt",
+            "clientSecret.json",
+            "AWSCredentials.ini",
+            "API Token.txt",
+            "credentials~",
+            "token~",
+            "github-token (backup).txt",
+            "githubtoken.txt",
+            "clientsecret.json",
+            "awscredentials.ini",
+            "dbpassword.txt",
+            "apitoken.txt",
+            "serviceAccount.json",
+            "ServiceAccount.yml",
+            "apiToken2.txt",
+            "token2026.txt",
+            "passwords2026.txt",
+            "tokenprod.txt",
+            "passwordbackup.txt",
+            "secretcopy.txt",
+            "authlocal.ini",
+            "credentialold.json",
+            "serviceaccount2.json",
+            "serviceAccount2.json",
+            "serviceaccountbackup.json",
+            "apikey.json",
+            "accesskey.txt",
+            "awsaccesskey.txt",
+            "openaiapikey.txt",
+            "password.md",
+            "credentials.markdown",
+            "client-secret.rst",
+            "auth.log",
+            "api-token.md",
+            "githubtoken.md",
+            "private-key.json",
+            "private_key.yaml",
+            "private.key.toml",
+            "privateKey.txt",
+            "privatekey.md",
+            "signing-key.json",
+            "signing_key.yaml",
+            "signing.key.toml",
+            "signingKey.txt",
+            "signingkey.md",
+            "api-token.txt.backup2",
+            "api-token.txt.bak1",
+            "api-token.txt.backup-copy",
+            "api-token.txt.backup_copy",
+            "credentials.json.old3",
+            "ｐａｓｓｗｏｒｄ.md",
+        )
+        for relative_path in sensitive_names:
+            with self.subTest(relative_path=relative_path):
+                with tempfile.TemporaryDirectory() as temporary:
+                    project = self.make_project(Path(temporary))
+                    (project / relative_path).write_text(
+                        "do-not-ship\n", encoding="utf-8"
+                    )
+
+                    result = self.run_packager(project, expect_success=False)
+
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn("credential-like", result.stderr)
+                    self.assertFalse(
+                        (
+                            project
+                            / "actual-opendesign-project-checkpoint-0.1.0.zip"
+                        ).exists()
+                    )
+
+    def test_common_credential_filename_allows_exact_exclusion(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = self.make_project(Path(temporary))
+            sensitive = project / "api-token.txt"
+            sensitive.write_text("do-not-ship\n", encoding="utf-8")
+
+            self.run_packager(project, "--exclude", "api-token.txt")
+
+            with zipfile.ZipFile(
+                project / "actual-opendesign-project-checkpoint-0.1.0.zip"
+            ) as archive:
+                self.assertNotIn("api-token.txt", archive.namelist())
+
+    def test_bounded_noncredential_filename_words_remain_allowed(self) -> None:
+        safe_names = (
+            "authorization.txt",
+            "secretary.txt",
+            "tokenizer.txt",
+            "design-tokens.json",
+            "authentication-flow.txt",
+            "OAuthFlow.md",
+            "OAuthClient.ts",
+            "GitHubOAuthCallback.html",
+            "AuthClient.ts",
+            "auth.js",
+            "TokenStore.ts",
+            "CredentialForm.tsx",
+            "PasswordField.vue",
+            "SecretEditor.py",
+            "serviceAccount.ts",
+            "ApiKeyInput.tsx",
+            "AccessKeyIcon.svg",
+            "DesignToken.ts",
+            "SecretIcon.svg",
+            "PasswordField.svg",
+            "auth-screen.html",
+            "PasswordField.md",
+            "SecretEditor.md",
+            "AuthFlow.md",
+            "api-token-guide.md",
+            "PrivateKeyParser.ts",
+            "SigningKeyIcon.svg",
+            "private-key-guide.md",
+            "signing-key-help.rst",
+            "PrivateKeyField.md",
+            "private-key-screen.html",
+            "ＰａｓｓｗｏｒｄＳｕｍｍａｒｙ.md",
+            "api-token-guide.md.backup-copy",
+            "PasswordField.md.backup_copy",
+        )
+        for name in safe_names:
+            with self.subTest(name=name):
+                self.assertFalse(PACKAGE.credential_like_path(name))
+
+        packaged_names = tuple(
+            name for name in safe_names if not name.casefold().endswith(".html")
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            project = self.make_project(Path(temporary))
+            for name in packaged_names:
+                (project / name).write_text("safe design content\n", encoding="utf-8")
+
+            self.run_packager(project)
+
+            with zipfile.ZipFile(
+                project / "actual-opendesign-project-checkpoint-0.1.0.zip"
+            ) as archive:
+                self.assertTrue(set(packaged_names).issubset(archive.namelist()))
 
     def test_vcs_control_files_and_case_variant_dependencies_are_excluded(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

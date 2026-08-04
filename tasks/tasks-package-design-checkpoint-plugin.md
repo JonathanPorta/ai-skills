@@ -104,6 +104,25 @@
       and absence of the coral dot differ.
     - The pair remains legible at plugin-card and native sizes.
 
+- [x] 4.6 Address owner and PR-review follow-up <!-- Serves: AC-1, AC-3, AC-4, AC-7, AC-10 -->
+  - [x] 4.6.1 Rebuild the handoff mint geometry as a uniform complete square
+    outside the checkpoint frame's open edge, without moving the amber shape.
+  - [x] 4.6.2 Expand both fail-closed credential detectors and their controls
+    across case, separators, bare names, and common text/config suffixes.
+  - [x] 4.6.3 Reject ordinal-only target labels across numbered, lettered,
+    Roman-numeral, and bare role forms while preserving descriptive labels.
+  - [x] 4.6.4 Record the owner's direct scope ratification, reconcile review
+    comment `5179218280`, run the full validation surface, and update PR #4.
+  - **Validates when:**
+    - The handoff frame has uniform 14 px mint sides, preserves the checkpoint
+      icon and amber path byte-for-byte, omits coral, and reads as a square at
+      native and 32 px sizes.
+    - Both production CLIs reject the review counterexamples plus adversarial
+      case/separator/suffix variants before publishing an archive.
+    - Exact exclusions and handoff reviewed inclusions remain positive controls.
+    - Generic positional labels fail and descriptive state/role labels pass.
+    - Local checks, the pinned Open Design contract, and hosted PR checks pass.
+
 ### Task 1.0 Preflight
 
 - Validation plan written: yes
@@ -150,7 +169,7 @@
 - Validation plan written: yes
 - Validation plan saved in artifact: yes
 - Validation review mode: auto-proceed; the owner supplied exact visual deltas
-  and explicitly requested publication to the existing draft PR.
+  and explicitly requested publication to the existing PR.
 - Canonical command surface identified: yes (`make check`, SVG XML/resource
   validation, side-by-side visual rendering, and `git diff --check`)
 - Acceptance criteria served by this task listed: yes (AC-1, AC-7)
@@ -166,10 +185,40 @@
 4. Run repository validation and diff checks, then update PR #4 and
    confirm its checks.
 
+### Task 4.6 Review Follow-up Preflight
+
+- Validation plan written: yes
+- Validation plan saved in artifact: yes
+- Validation review mode: auto-proceed; the owner requested all appropriate
+  review fixes and explicitly authorized updating the existing PR branch.
+- Canonical command surface identified: yes (`make check`,
+  `make integration-open-design`, SVG render inspection, adversarial CLI
+  controls, `git diff --check`, and hosted PR checks)
+- Acceptance criteria served by this task listed: yes (AC-1, AC-3, AC-4,
+  AC-7, AC-10)
+- PR metadata, top-level feedback, thread state, current helpers/tests, icon
+  geometry, and current Rule 9 read before modification: yes
+
+**Pre-implementation validation plan:**
+
+1. Preserve the checkpoint SVG and amber path checksums; replace the inward
+   handoff closure with a single seam-free uniform outer ring.
+2. Add red-first credential and label counterexamples from the review plus
+   broader case/separator/suffix and ordinal-form matrices.
+3. Implement the narrowest shared behavior that closes those counterexamples
+   without weakening exact-review controls or descriptive labels.
+4. Render the icon pair at native and small sizes, run narrow regressions,
+   `make check`, pinned Open Design integration, secret/diff audits, and an
+   independent phase-gate review before publication.
+5. Update PR #4 by normal fast-forward only and require its complete hosted
+   matrix to pass.
+
 ## Current Status
 
-Tasks 1.0 through 4.5 are implemented and validated. PR #4 is open and linked
-to bug report #3.
+Tasks 1.0 through 4.6 are implemented and locally validated. Task 4.6 corrects
+the handoff icon and addresses PR-review findings F1 through F3. PR #4 remains
+open and linked to bug report #3; its updated hosted matrix is the publication
+gate.
 
 ## Acceptance Criteria Verification
 
@@ -188,7 +237,7 @@ to bug report #3.
 
 ## Validation Results
 
-- `make check` — 49 tests passed; one opt-in integration test skipped by the
+- `make check` — 58 tests passed; one opt-in integration test skipped by the
   default suite as designed.
 - `make integration-open-design OPEN_DESIGN_REPO=/workspace/scratch/0b3846b623e4/open-design-current`
   — one production-contract integration passed at exact revision
@@ -201,8 +250,13 @@ to bug report #3.
 - Paired-icon visual review — checkpoint SHA-256 remained
   `a676e7eb109b66cf0b1f2a191100b35e497abcdbbb3dd01c4f590989b0a877ba`;
   both native and 32 px renders passed with no blocker, major, or minor finding.
-- Final adversarial review — prior credential, case-variant exclusion, mockup
-  completeness, label association, `srcset`, and URL-encoding findings closed.
+- Review follow-up adversarial gates — both production credential classifiers
+  passed 26 sensitive and 19 safe-name probes per helper while preserving exact
+  controls; the functional-label classifier passed exhaustive canonical Roman
+  1–3999 checks plus Unicode, compatibility, ordinal, and descriptive controls;
+  neither gate retained a blocker, major, or minor finding.
+- Final GitHub Actions matrix for Task 4.6 — pending publication of this exact
+  reviewed tree.
 
 ## Reconciliation Audit
 
@@ -214,7 +268,7 @@ to bug report #3.
   re-evaluate when the upstream capability model changes.
 - **Info:** Direct Codex execution of the new checkpoint skill is conservatively
   labeled format-compatible until a separate harness-forward test is added.
-- **Operational:** The explicitly authorized feature branch, issue #3, and draft
+- **Operational:** The explicitly authorized feature branch, issue #3, and
   PR #4 are published. Rule 9 still does not authorize merge or a direct push
   to `main`.
 

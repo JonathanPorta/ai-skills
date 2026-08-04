@@ -1,7 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
   <title id="title">Package Design Handoff</title>
   <rect width="128" height="128" rx="28" fill="#17243d"/>
-  <path d="M34 29h60v14H48v42h46v14H34z" fill="#8ad8c8"/>
+  <path d="M34 29h74v70H34zM48 43v42h46V43z" fill="#8ad8c8" fill-rule="evenodd" clip-rule="evenodd"/>
   <path d="M56 55h38v14H70v16H56z" fill="#f5c96a"/>
-  <path d="M80 43h14v42H80z" fill="#8ad8c8"/>
 </svg>

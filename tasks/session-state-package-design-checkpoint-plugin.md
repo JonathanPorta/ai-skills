@@ -1,15 +1,14 @@
 # Session State: package-design-checkpoint-plugin
-Last updated: 2026-08-04T12:48:39Z
+Last updated: 2026-08-04T14:04:53Z
 
 ### Current Position
 
 - **Validation Review Mode:** auto-proceed
-- **Current Phase:** Human review
-- **Working on:** Owner review of PR #4
-- **Status:** Issue #3 and PR #4 are open. Task 4.5 preserved the checkpoint
-  icon byte-for-byte and aligned the handoff icon as the same closed package
-  without the coral status dot. GitHub Actions run `30910687979` passes the
-  Open Design contract plus Ubuntu/macOS on Python 3.10 and 3.14.
+- **Current Phase:** Publication gate
+- **Working on:** Task 4.6 — publish reviewed tree and confirm hosted checks
+- **Status:** Issue #3 and PR #4 are open. The handoff icon now uses a uniform
+  outer mint ring; owner-ratified scope is recorded; review findings F2 and F3
+  have red-first regressions and pass the complete local validation surface.
 - **Blocked:** No. The owner explicitly authorized a normal feature-branch push,
   pull-request creation, and a related issue in this session.
 
@@ -25,8 +24,10 @@ Last updated: 2026-08-04T12:48:39Z
 - Checkpoint and handoff archives have independent filename/version streams.
 - Checkpoints do not generate final implementation-handoff artifacts.
 - The checkpoint icon remains the open package with a coral status dot; the
-  handoff icon uses the same background, palette, and geometry but closes the
-  package frame and omits the dot.
+  handoff icon keeps the same background and unmoved amber geometry, extends a
+  uniform mint closure outside the open edge, and omits the dot.
+- JonathanPorta directly ratified the checkpoint/handoff split and minimum
+  checkpoint contract in the owner session; PR #4 records that decision.
 
 ### Codebase Understanding
 
@@ -41,9 +42,11 @@ Last updated: 2026-08-04T12:48:39Z
 
 ### What's Next
 
-1. Owner reviews PR #4 and confirms the acceptance criteria.
-2. After owner sign-off, delete this transient session-state file before merge.
-3. After merge, re-import each Open Design plugin to refresh its install-time
+1. Publish the validated Task 4.6 tree and PR-body reconciliation to PR #4.
+2. Confirm the complete hosted matrix passes on the new head.
+3. Owner reviews PR #4 and confirms final acceptance.
+4. After owner sign-off, delete this transient session-state file before merge.
+5. After merge, re-import each Open Design plugin to refresh its install-time
    local copy.
 
 ### Blockers / Open Questions
