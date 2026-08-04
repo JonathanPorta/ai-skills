@@ -4,6 +4,7 @@ import json
 import errno
 import importlib.util
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -213,6 +214,7 @@ class PackageHandoffTests(unittest.TestCase):
                 path.unlink()
             (project / ".git").rmdir()
             (project / ".git").write_text("gitdir: ../outside/.git/worktrees/project\n")
+            shutil.rmtree(project / "node_modules")
             (project / "NODE_MODULES" / "ignored").mkdir(parents=True)
             (project / "NODE_MODULES" / "ignored" / "dependency.js").write_text(
                 "ignored\n", encoding="utf-8"

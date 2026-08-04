@@ -75,17 +75,20 @@
       first-class plugin.
     - No unsupported desktop `od` command is recommended.
 
-- [x] 4.0 Validate the integrated change <!-- Serves: AC-8, AC-10 -->
+- [ ] 4.0 Validate the integrated change <!-- Serves: AC-8, AC-10 -->
   - [x] 4.1 Extend sidecar validation and negative tests.
   - [x] 4.2 Exercise plugin-local loading and companion-script staging for both
     skills against current pinned Open Design source.
   - [x] 4.3 Run the full suite, inspect the diff, reconcile every acceptance
     criterion, and prepare one feature commit plus PR text.
+  - [ ] 4.4 Make the case-variant dependency fixtures portable to
+    case-insensitive macOS filesystems and re-run the PR matrix.
   - **Validates when:**
     - `make check` exits zero.
     - The current Open Design integration proves both plugin-local skills and
       helpers are active/staged.
     - `git diff --check` exits zero.
+    - Ubuntu and macOS matrix jobs pass for Python 3.10 and 3.14.
 
 ### Task 1.0 Preflight
 
@@ -109,11 +112,30 @@
 4. Audit documentation claims and final diffs against every acceptance
    criterion before preparing publication artifacts.
 
+### Task 4.4 CI Follow-up Preflight
+
+- Validation plan written: yes
+- Validation plan saved in artifact: yes
+- Validation review mode: auto-proceed
+- Canonical command surface identified: yes (`make check` and
+  `make integration-open-design`)
+- Acceptance criteria served by this task listed: yes (AC-10)
+- Relevant failing tests and GitHub Actions logs read before modification: yes
+
+**Pre-implementation validation plan:**
+
+1. Preserve the case-variant exclusion assertion while making fixture creation
+   deterministic on case-sensitive and case-insensitive filesystems.
+2. Run `make check`, the pinned Open Design integration, and
+   `git diff --check` locally.
+3. Publish the focused fix and require all Ubuntu/macOS Python matrix jobs to
+   pass before restoring Task 4.0 to complete.
+
 ## Current Status
 
-Tasks 1.0 through 4.0 are implemented and validated. The local branch is ready
-for the explicitly authorized feature-branch push and owner review through a
-pull request.
+Tasks 1.0 through 3.0 are complete. Task 4.4 is correcting a macOS
+case-insensitive-filesystem fixture failure discovered by PR validation; the
+packaging implementation and Open Design contract jobs pass.
 
 ## Acceptance Criteria Verification
 
