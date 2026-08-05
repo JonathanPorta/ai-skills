@@ -38,7 +38,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: nexu-io/open-design
-          ref: 517f39acde402c1a7af2189167a8d6957a3dac71
+          ref: fe1231eed69a2312e56c4e155e06781981fff068
           path: .open-design-contract
           persist-credentials: false
       - name: Set up Python
@@ -51,6 +51,9 @@ jobs:
           node-version: "24"
       - name: Install pinned Open Design runtime dependencies
         working-directory: .open-design-contract
-        run: corepack pnpm install --frozen-lockfile --ignore-scripts --filter open-design
-      - name: Verify production discovery, staging, and packaging
+        run: corepack pnpm install --frozen-lockfile --ignore-scripts --filter 'open-design...'
+      - name: Build pinned Open Design plugin runtime packages
+        working-directory: .open-design-contract
+        run: corepack pnpm --filter '@open-design/plugin-runtime...' --workspace-concurrency=1 run build
+      - name: Verify production plugin loading, staging, and packaging
         run: make integration-open-design OPEN_DESIGN_REPO="$GITHUB_WORKSPACE/.open-design-contract"

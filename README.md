@@ -1,126 +1,166 @@
 # AI Skills
 
-A curated collection of reusable workflows for AI agents. Each skill lives once,
-in a standard Agent Skills directory, while harness-specific metadata stays beside
-the skill it describes.
-
-The collection is intentionally boring in the best possible way: clone it,
-install the skill you need, and let validation catch packaging mistakes before
-an agent does something creative with them.
+A curated collection of reusable, independently installable Agent Skills. Each
+skill lives once under `skills/`; harness-specific metadata and Open Design's
+additive plugin sidecar stay beside the portable `SKILL.md` they describe.
 
 ## Skills
 
-| Skill | Purpose | Open Design | OpenAI ChatGPT / Codex | Other Agent Skills harnesses |
+| Skill | Use it for | Open Design | OpenAI ChatGPT / Codex | Other Agent Skills harnesses |
 |---|---|---|---|---|
-| [`package-design-handoff`](skills/package-design-handoff/) | Create immutable design-handoff ZIPs with lowercase kebab-case names, automatic SemVer increments, manifests, checksums, and validation. | GitHub plugin import verified; source-checkout contract-tested at `517f39a…` | Verified | Format-compatible; not yet verified |
+| [`package-design-checkpoint`](skills/package-design-checkpoint/) | Freeze an interim design state for review, comparison, or later resumption with a root index and concise changelog. | First-class GitHub plugin; current runtime contract-tested at `fe1231e…` | Format-compatible; helper tested, direct harness not yet verified | Format-compatible; not yet verified |
+| [`package-design-handoff`](skills/package-design-handoff/) | Deliver an accepted, complete, implementation-ready design package with manifest, checksums, and provenance. | First-class GitHub plugin; current runtime contract-tested at `fe1231e…` | Verified | Format-compatible; not yet verified |
 
-Compatibility labels are intentionally conservative:
+Compatibility labels are conservative:
 
-- **Contract-tested** means the repository pins and tests the harness discovery,
-  metadata, and invocation contract at an exact upstream revision.
-- **Verified** means the skill and its executable behavior have been tested with
-  the named harness family.
-- **Format-compatible** means the directory follows the open Agent Skills layout,
-  but this repository has not yet completed an end-to-end harness test.
-- **Unsupported** will mean a known incompatibility, not merely a missing test.
+- **Contract-tested** means the repository pins and exercises the harness's
+  production discovery/loading and staging contract at an exact revision.
+- **Verified** means the portable skill and executable behavior have been tested
+  with the named harness family.
+- **Format-compatible** means the directory follows the Agent Skills layout but
+  has not completed an end-to-end harness test here.
 
-Update this table as harness support is actually exercised. Do not duplicate a
-skill into one directory per agent.
+## Checkpoint or handoff?
+
+| Concern | Checkpoint (`/checkpoint` shorthand) | Handoff (`/handoff` shorthand) |
+|---|---|---|
+| Lifecycle point | In progress: review, compare, preserve, or resume | Accepted: complete and implementation-ready |
+| Archive filename | `<slug>-checkpoint-X.Y.Z.zip` | `<slug>-X.Y.Z.zip` |
+| Version stream | Independent; patch by default | Independent; scope-sensitive patch/minor/major |
+| Payload emphasis | Current mockups, prototypes, states, alternatives, nonvisual design artifacts, required local assets | Complete shippable sources, exports, specs, implementation notes, and provenance |
+| Navigation | Required root `index.html` or `index.md`; one primary plus functionally labeled alternatives | No checkpoint-style launcher inventory required |
+| Generated metadata | Concise `_checkpoint/CHANGELOG.md` only | `_handoff/README.md`, manifest, and per-file checksums |
+| Final ZIP SHA-256 | Optional | Required |
+| Claim | Explicitly nonfinal | Complete final delivery |
+
+The slash forms in this table are human shorthand, not Open Design slash
+commands. In Open Design, install and apply the corresponding plugin from the
+Plugins UI.
 
 ## Repository layout
 
 ```text
 ai-skills/
 ├── skills/
+│   ├── package-design-checkpoint/
+│   │   ├── SKILL.md
+│   │   ├── README.md
+│   │   ├── open-design.json
+│   │   ├── agents/openai.yaml
+│   │   ├── assets/
+│   │   └── scripts/
 │   └── package-design-handoff/
-│       ├── SKILL.md
-│       ├── README.md
-│       ├── agents/
-│       │   └── openai.yaml
-│       ├── assets/
-│       └── scripts/
+│       └── ...same portable plugin shape...
 ├── scripts/                 # Collection validation
-├── tests/                   # Repository-level behavioral tests
-├── tasks/                   # Project requirements and implementation records
+├── tests/                   # Behavioral, security, and integration tests
+├── tasks/                   # Requirements and implementation records
 ├── Makefile                 # Canonical command surface
 └── README.md
 ```
 
-Every direct child of `skills/` is independently installable. Its directory name
-must exactly match the `name` in `SKILL.md`. Its README explains that skill's
-behavior, requirements, harness-specific installation, and invocation.
+Every direct child of `skills/` is independently importable. Its directory name
+must match both `SKILL.md` and `open-design.json` identity.
 
-## Install a skill
+## Install in Open Design
 
-Open Design can import an individual skill directory directly from GitHub. Open
-**Plugins**, select **Import plugin** and **From GitHub**, then enter:
+Open **Plugins → Import plugin → From GitHub** and import the individual plugin
+you need:
 
 ```text
+github:JonathanPorta/ai-skills@main/skills/package-design-checkpoint
 github:JonathanPorta/ai-skills@main/skills/package-design-handoff
 ```
 
-This is an install-time snapshot, not a live checkout. Re-import the same source
-or use Open Design's plugin-upgrade command to fetch later changes from `main`.
-See the [`package-design-handoff` installation guide](skills/package-design-handoff/README.md)
-for screenshots, update behavior, reproducible revision pinning, and the separate
-execution-agent installation requirement.
+This GitHub-subdirectory import installs an Open Design **plugin**. It is
+expected to appear under **Plugins**, not as a separately installed item in Open
+Design's **Skills** list. There is no second Open Design Skills-install step.
 
-For filesystem-discovered harnesses, clone the repository, review the revision
-you intend to run, and validate it. Symlinking those harnesses to the checkout
-lets a reviewed pull update their installed copy in place.
+Apply it from the project's **+ → Plugins** picker, the installed card's **Use**
+menu, or by selecting the installed result from the `@` picker's **Plugins**
+section. Typing the literal text `/checkpoint`, `/handoff`,
+`$package-design-…`, or a plugin name without selecting the installed plugin is
+not equivalent to applying it. The slash forms are conversational shorthand,
+not native Open Design commands.
+
+Each `open-design.json` declares its local `SKILL.md` under
+`od.context.skills`. Current Open Design injects that body and stages the entire
+plugin directory—including its Python helper—into the active project. A second
+installation in the selected local execution agent is therefore not required
+for a run launched through the applied Open Design plugin. Do not assume that a
+delegated child thread received the active plugin binding: keep final packaging
+in the applied parent run, or explicitly pass the staged `SKILL.md`/helper path
+and instructions. A separately launched session outside that run needs its own
+normal skill installation.
+
+GitHub imports are install-time local copies. Open Design does not poll `main`;
+repeat the same import to fetch updates. Re-import replaces the installed plugin
+files, so new runs use the refreshed copy. Open Design preserves applied
+manifest/query metadata, but the tested runtime does not content-address
+historical plugin-local `SKILL.md` or helper bytes. Replace `main` with a reviewed
+commit SHA and leave that installation unchanged when byte-for-byte replay
+matters.
+
+The packaged macOS app does not put Open Design's source-checkout CLI on
+`PATH`. `/usr/bin/od` is an unrelated octal/hex dump utility, so do not use it
+for desktop plugin updates. The handoff guide includes the observed command
+output and the supported re-import flow.
+
+## Install for direct agent use
+
+Clone and validate a reviewed revision:
 
 ```bash
-git clone git@github.com:JonathanPorta/ai-skills.git
-cd ai-skills
+git clone git@github.com:JonathanPorta/ai-skills.git "$HOME/src/ai-skills"
+cd "$HOME/src/ai-skills"
 make check
+export AI_SKILLS_REPO="$PWD"
 ```
 
-Using a local checkout keeps private-repository authentication in Git and avoids
-putting credentials in an installer command. Prefer symlinking each skill from
-that checkout when the target harness supports filesystem discovery.
+For Codex user-wide discovery, link whichever portable skills you want:
 
-## Current manifest decision
+```bash
+mkdir -p "$HOME/.agents/skills"
+ln -s "$AI_SKILLS_REPO/skills/package-design-checkpoint" \
+  "$HOME/.agents/skills/package-design-checkpoint"
+ln -s "$AI_SKILLS_REPO/skills/package-design-handoff" \
+  "$HOME/.agents/skills/package-design-handoff"
+```
 
-This implementation does not add a collection-level `package.json`-style
-manifest. That is an implementation choice under review, not a claim of prior
-owner ratification. Today the required metadata already lives at skill scope:
+Symlinking keeps the installed agent on the reviewed checkout. Review and run
+`make check` before advancing that checkout. Other Agent Skills-compatible
+harnesses use their own configured skill directory.
 
-- [`SKILL.md`](https://agentskills.io/specification) is already the required
-  per-skill manifest and discovery surface.
-- `agents/openai.yaml` carries OpenAI-specific interface metadata without
-  changing the portable skill instructions.
-- Open Design can adapt a standard `SKILL.md` directory into a minimal plugin;
-  the GitHub-subpath import has been exercised in the desktop UI. The pinned
-  source-checkout integration separately verifies discovery, staging, and
-  execution at revision `517f39a…`.
-- The skill currently has no `open-design.json` sidecar. It therefore appears as
-  a minimal `v0.0.0` plugin, and the selected local execution agent must discover
-  its own installation of the skill to load the complete instructions and
-  bundled helper. Add a sidecar only when Open Design-native metadata and direct
-  plugin-local skill staging are intentionally adopted and tested.
+## Manifest policy
+
+The repository intentionally has no collection-level package manifest. Each
+independent plugin already carries the metadata its consumers need:
+
+- `SKILL.md` is the portable Agent Skills contract and direct-agent discovery
+  surface.
+- `agents/openai.yaml` supplies OpenAI-specific interface metadata without
+  changing portable behavior.
+- `open-design.json` is an additive Open Design sidecar. `compat.agentSkills`
+  advertises portability, while `od.context.skills[{"path":"./SKILL.md"}]`
+  activates the plugin-local workflow and companion-file staging.
 - Git records collection history and reviewable changes.
-- Runtime dependencies belong with the script or ecosystem that needs them.
-  The current packaging helper uses only Python's standard library.
+- Both helpers use only Python's standard library.
 
-The Agent Skills community is discussing a collection-level
-[`skills.json` and lockfile proposal](https://github.com/agentskills/agentskills/discussions/210),
-but it is not a ratified standard. Add a generated catalog or standard manifest
-when the owner accepts one or when distribution, dependency resolution, or a
-stable specification makes it useful.
+Add a generated catalog or standard collection manifest when a stable
+distribution or dependency-resolution contract makes it useful.
 
 ## Add a skill
 
-1. Create `skills/<skill-name>/`; use lowercase letters, digits, and hyphens.
-2. Add `SKILL.md` with `name` and `description` frontmatter plus concise,
-   imperative instructions.
-3. Add a concise skill-local README covering purpose, requirements,
-   harness-specific installation, and invocation.
-4. Add only resources the skill needs: `scripts/`, `references/`, `assets/`, or
-   harness metadata under `agents/`.
-5. Add or update repository-level behavioral tests when the skill includes
-   executable logic.
-6. Update the catalog and compatibility table above.
-7. Run `make check` before opening a pull request.
+1. Create `skills/<skill-name>/` with a lowercase kebab-case name.
+2. Add concise imperative `SKILL.md` instructions with matching `name` and a
+   precise trigger description.
+3. Add a README covering purpose, requirements, installation, invocation,
+   updates, and relevant product boundaries.
+4. Add `open-design.json` with matching identity/stable SemVer, portable
+   compatibility metadata, and an explicit plugin-local skill binding.
+5. Add only required `scripts/`, `references/`, `assets/`, and `agents/`
+   resources; keep an imported skill subtree self-contained.
+6. Add behavioral tests for executable logic and update this catalog.
+7. Run `make check` before publication.
 
 ## Validation
 
@@ -130,15 +170,22 @@ make test
 make check
 ```
 
-`make test` runs behavioral and security regressions. `make check` also parses
-and validates Agent Skills and OpenAI YAML schemas, naming and field limits,
-asset paths, every text or executable resource, hidden Unicode, Python syntax,
-and skill-local documentation. It requires GNU Make and Python 3.10 or newer,
-with no third-party Python packages.
+`make test` runs behavioral and security regressions. `make check` also validates
+Agent Skills and OpenAI YAML, Open Design sidecar identity and local paths,
+resource references, hidden Unicode, JSON, Python syntax, naming, and
+skill-local documentation. It requires GNU Make and Python 3.10 or newer, with
+no third-party Python packages.
+
+The current Open Design contract test is separate because it checks out and
+installs the exact pinned upstream runtime:
+
+```bash
+make integration-open-design OPEN_DESIGN_REPO=/path/to/pinned/open-design
+```
 
 ## Security
 
-Skills can direct an agent to execute bundled code. Review `SKILL.md` and every
-script before installing a skill from an untrusted branch or fork. Validation
-proves structure and tested behavior; it does not turn source review into an
-optional hobby.
+Skills can direct an agent to execute bundled code. Review `SKILL.md`,
+`open-design.json`, and every script before installing an untrusted revision.
+Validation proves structure and tested behavior; it does not replace source
+review.

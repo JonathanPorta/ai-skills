@@ -1,0 +1,8 @@
+interface:
+  display_name: Package Design Checkpoint
+  short_description: Freeze reviewable design checkpoints
+  default_prompt: Use $package-design-checkpoint to freeze this in-progress design as a reviewable, versioned checkpoint ZIP. Do not create a final implementation handoff.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  allow_implicit_invocation: true
