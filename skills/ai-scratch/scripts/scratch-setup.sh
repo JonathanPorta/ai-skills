@@ -2,107 +2,105 @@
 #
 # scratch-setup.sh — show or set where the AI scratch directory lives.
 #
-#   scratch-setup.sh                     # show the resolved root and its source
-#   scratch-setup.sh --set ~/work/scratch  # write it to the config file
-#   scratch-setup.sh --idle-days 14      # change the default idle window
+#   scratch-setup.sh                      # show the resolved root and its source
+#   scratch-setup.sh --set ~/work/scratch # persist it (creates the directory)
+#   scratch-setup.sh --idle-days 14       # default idle window for the sweep
+#   scratch-setup.sh --protect NAME       # pin an extra entry against cleanup
 #
-# Resolution order, highest first:
-#   1. --root on the command line
-#   2. $AI_SCRATCH_ROOT
-#   3. ~/.ai-scratch/config
-#   4. /tmp/ai-scratch
+# Resolution order, highest first: --root, $AI_SCRATCH_ROOT,
+# ~/.ai-scratch/config, then /tmp/ai-scratch.
 #
 set -uo pipefail
 
-CONFIG_DIR="${AI_SCRATCH_CONFIG_DIR:-$HOME/.ai-scratch}"
-CONFIG="$CONFIG_DIR/config"
-DEFAULT_ROOT="/tmp/ai-scratch"
+SELF_DIR="$(CDPATH= cd -P -- "$(dirname -- "$0")" && pwd -P)"
+# shellcheck source=lib-scratch.sh
+. "$SELF_DIR/lib-scratch.sh"
 
-set_root=""; set_idle=""
+set_root=""; set_idle=""; set_protect=""; explicit_root=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --set) set_root="${2:-}"; shift 2;;
-    --set=*) set_root="${1#*=}"; shift;;
-    --idle-days) set_idle="${2:-}"; shift 2;;
-    --idle-days=*) set_idle="${1#*=}"; shift;;
-    -h|--help) sed -n '3,15p' "$0"; exit 0;;
-    *) printf 'scratch-setup: unknown option: %s\n' "$1" >&2; exit 2;;
+    --set)          scratch_need_value $# "--set";        set_root="$2"; shift 2;;
+    --set=*)        set_root="${1#*=}"; shift;;
+    --root)         scratch_need_value $# "--root";       explicit_root="$2"; shift 2;;
+    --root=*)       explicit_root="${1#*=}"; shift;;
+    --idle-days)    scratch_need_value $# "--idle-days";  set_idle="$2"; shift 2;;
+    --idle-days=*)  set_idle="${1#*=}"; shift;;
+    --protect)      scratch_need_value $# "--protect";    set_protect="$2"; shift 2;;
+    --protect=*)    set_protect="${1#*=}"; shift;;
+    -h|--help)      sed -n '3,13p' "$0"; exit 0;;
+    *) scratch_die "unknown option: $1" 2;;
   esac
 done
 
-read_config_key() {   # <KEY>
-  [ -f "$CONFIG" ] || return 0
-  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CONFIG" | tail -1
+CONFIG="$(scratch_config_path)"
+CONFIG_DIR="$(dirname -- "$CONFIG")"
+
+config_put() {  # <KEY> <VALUE>
+  mkdir -p "$CONFIG_DIR" || exit 1
+  touch "$CONFIG"
+  local tmp="$CONFIG.tmp.$$"
+  { grep -v "^[[:space:]]*$1[[:space:]]*=" "$CONFIG" 2>/dev/null
+    printf '%s = %s\n' "$1" "$2"; } >"$tmp" && mv "$tmp" "$CONFIG"
+  printf 'set %s = %s\n' "$1" "$2"
 }
 
 if [ -n "$set_root" ]; then
   case "$set_root" in "~/"*) set_root="$HOME/${set_root#\~/}";; esac
-  # Refuse to enshrine a root the sweep would rightly refuse to run against.
-  case "$set_root" in
-    / | "$HOME" | /tmp | /var/tmp | /private/tmp)
-      printf 'scratch-setup: refusing to set the scratch root to %s.\n' "$set_root" >&2
-      printf '  That directory holds files this tool did not create. Use a subdirectory.\n' >&2
-      exit 1;;
-  esac
-  [ "$(printf '%s' "$set_root" | tr -cd / | wc -c)" -ge 2 ] || {
-    printf 'scratch-setup: %s is too shallow to be a safe scratch root\n' "$set_root" >&2; exit 1; }
+  scratch_text_is_sane "$set_root" || scratch_die "that path contains control characters"
+  case "$set_root" in /*) : ;; *) scratch_die "the scratch root must be an absolute path, got: $set_root";; esac
 
-  mkdir -p "$CONFIG_DIR" "$set_root" || exit 1
-  touch "$CONFIG"
-  tmp="$CONFIG.tmp.$$"
-  { grep -v '^[[:space:]]*AI_SCRATCH_ROOT[[:space:]]*=' "$CONFIG" 2>/dev/null
-    printf 'AI_SCRATCH_ROOT = %s\n' "$set_root"; } > "$tmp" && mv "$tmp" "$CONFIG"
-  printf 'set AI_SCRATCH_ROOT = %s\n' "$set_root"
+  # Create before canonicalizing: a path we cannot stat is a path we cannot
+  # bind to a physical identity, and persisting an unresolvable root is how a
+  # later sweep ends up pointed somewhere else.
+  mkdir -p "$set_root" || scratch_die "cannot create $set_root"
+  canon="$(scratch_canonical "$set_root")" || exit 1
+  if reason="$(scratch_root_unsafe_reason "$canon")"; then
+    scratch_die "refusing to set the scratch root to $canon — that is $reason. Use a subdirectory."
+  fi
+  config_put AI_SCRATCH_ROOT "$canon"   # persist the canonical form, never the input
 fi
 
 if [ -n "$set_idle" ]; then
-  case "$set_idle" in ''|*[!0-9]*) printf 'scratch-setup: --idle-days needs a whole number\n' >&2; exit 2;; esac
-  mkdir -p "$CONFIG_DIR"; touch "$CONFIG"
-  tmp="$CONFIG.tmp.$$"
-  { grep -v '^[[:space:]]*AI_SCRATCH_IDLE_DAYS[[:space:]]*=' "$CONFIG" 2>/dev/null
-    printf 'AI_SCRATCH_IDLE_DAYS = %s\n' "$set_idle"; } > "$tmp" && mv "$tmp" "$CONFIG"
-  printf 'set AI_SCRATCH_IDLE_DAYS = %s\n' "$set_idle"
+  case "$set_idle" in ''|*[!0-9]*) scratch_die "--idle-days needs a whole number" 2;; esac
+  config_put AI_SCRATCH_IDLE_DAYS "$set_idle"
 fi
 
-# Recommend before asking. An existing directory that already looks like scratch
-# beats a fresh one the operator then has to migrate into, so prefer a populated
-# candidate; otherwise fall back to the ephemeral built-in.
-recommend() {
-  local c
-  for c in "$HOME/devel/portaj/ai-scratch" "$HOME/ai-scratch" "$HOME/.local/share/ai-scratch"; do
-    if [ -d "$c" ] && [ -n "$(ls -A "$c" 2>/dev/null)" ]; then
-      printf '%s\t%s' "$c" "already exists and has content"; return
-    fi
-  done
-  printf '%s\t%s' "$DEFAULT_ROOT" "ephemeral, cleared on reboot"
-}
-
-cfg_root="$(read_config_key AI_SCRATCH_ROOT)"
-cfg_idle="$(read_config_key AI_SCRATCH_IDLE_DAYS)"
-
-if [ -n "${AI_SCRATCH_ROOT:-}" ]; then root="$AI_SCRATCH_ROOT"; src="environment (AI_SCRATCH_ROOT)"
-elif [ -n "$cfg_root" ];            then root="$cfg_root";      src="config ($CONFIG)"
-else                                     root="$DEFAULT_ROOT";  src="built-in default"
+if [ -n "$set_protect" ]; then
+  scratch_text_is_sane "$set_protect" || scratch_die "that name contains control characters"
+  existing="$(scratch_config_get AI_SCRATCH_PROTECT)"
+  case " $existing " in *" $set_protect "*) : ;; *) existing="$existing${existing:+ }$set_protect";; esac
+  config_put AI_SCRATCH_PROTECT "$existing"
 fi
 
-printf '\nscratch root : %s\n' "$root"
-printf 'source       : %s\n' "$src"
-printf 'idle window  : %s days (%s)\n' "${cfg_idle:-7}" "$([ -n "$cfg_idle" ] && echo config || echo default)"
-printf 'config file  : %s%s\n' "$CONFIG" "$([ -f "$CONFIG" ] && echo '' || echo ' (not present)')"
-if [ -d "$root" ]; then
-  printf 'status       : exists\n'
+# --- report -----------------------------------------------------------------
+scratch_resolve_root "$explicit_root"
+idle="$(scratch_config_get AI_SCRATCH_IDLE_DAYS)"
+protect="$(scratch_config_get AI_SCRATCH_PROTECT)"
+
+printf '\nscratch root : %s\n' "$SCRATCH_ROOT_RAW"
+printf 'source       : %s\n' "$SCRATCH_ROOT_SRC"
+printf 'idle window  : %s days (%s)\n' "${idle:-7}" "$([ -n "$idle" ] && echo config || echo default)"
+printf 'protected    : hidden entries, plus%s\n' "${protect:+ $protect}"
+printf 'config file  : %s%s\n' "$CONFIG" "$([ -f "$CONFIG" ] && printf '' || printf ' (not present)')"
+
+if canon="$(scratch_canonical "$SCRATCH_ROOT_RAW" 2>/dev/null)"; then
+  printf 'resolves to  : %s\n' "$canon"
+  if reason="$(scratch_root_unsafe_reason "$canon")"; then
+    printf 'status       : UNSAFE — %s; the sweep will refuse to run here\n' "$reason"
+  else
+    printf 'status       : ok\n'
+  fi
 else
-  printf 'status       : DOES NOT EXIST — create it, or run --set to point elsewhere\n'
+  printf 'status       : DOES NOT EXIST — run --set to create and record one\n'
 fi
 
 # Nothing configured yet: recommend, and make clear this is a question.
-if [ -z "${AI_SCRATCH_ROOT:-}" ] && [ -z "$cfg_root" ] && [ -z "$set_root" ]; then
-  IFS=$'\t' read -r rec_path rec_why <<EOF
-$(recommend)
-EOF
-  printf 'NOT CONFIGURED — recommendation:\n\n'
-  printf '  %s\n' "$rec_path"
-  printf '  (%s)\n\n' "$rec_why"
-  printf 'Confirm this path, or supply a different one:\n'
-  printf '  scratch-setup.sh --set %s\n\n' "$rec_path"
+if [ -z "${AI_SCRATCH_ROOT:-}" ] && [ -z "$(scratch_config_get AI_SCRATCH_ROOT)" ] && [ -z "$set_root" ]; then
+  rec="$SCRATCH_DEFAULT_ROOT"; why="ephemeral, cleared on reboot"
+  for c in "$HOME/devel/portaj/ai-scratch" "$HOME/ai-scratch" "$HOME/.local/share/ai-scratch"; do
+    if [ -d "$c" ] && [ -n "$(ls -A "$c" 2>/dev/null)" ]; then rec="$c"; why="already exists and has content"; break; fi
+  done
+  printf '\nNOT CONFIGURED — recommendation:\n\n  %s\n  (%s)\n\n' "$rec" "$why"
+  printf 'Confirm this path, or supply a different one:\n  %s --set %s\n' "$0" "$rec"
 fi
+printf '\n'
