@@ -5,7 +5,8 @@
 # Reports by default. Nothing is ever deleted without --apply, and even then
 # only direct children of the scratch root that pass every keep rule below.
 #
-#   scratch-sweep.sh                 # report only: what is reclaimable and why
+#   scratch-sweep.sh                 # dry run: what is reclaimable and why
+#   scratch-sweep.sh --dry-run       # same thing, said explicitly
 #   scratch-sweep.sh --older-than 14 # only consider entries idle 14+ days
 #   scratch-sweep.sh --apply         # delete the reclaimable set
 #
@@ -22,6 +23,9 @@ while [ $# -gt 0 ]; do
     --root) ROOT="${2:-}"; shift 2;;
     --root=*) ROOT="${1#*=}"; shift;;
     --apply) APPLY=1; shift;;
+    # Accepted and explicitly a no-op: reporting is already the default, and a
+    # safety flag that errors out is a bad surprise on a destructive tool.
+    -n|--dry-run) APPLY=0; shift;;
     -h|--help) sed -n '3,12p' "$0"; exit 0;;
     *) printf 'scratch-sweep: unknown option: %s\n' "$1" >&2; exit 2;;
   esac
@@ -101,7 +105,7 @@ printf 'keep      %5s entries  %s\n' "$keep_n" "$(human "$keep_kb")"
 printf 'reclaim   %5s entries  %s\n' "$reclaim_n" "$(human "$reclaim_kb")"
 
 if [ "$APPLY" != 1 ]; then
-  printf '\nReport only. Re-run with --apply to delete the FREE entries.\n'
+  printf '\nDry run — nothing was deleted. Re-run with --apply to remove the FREE entries.\n'
   exit 0
 fi
 

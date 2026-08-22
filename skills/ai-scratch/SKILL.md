@@ -47,15 +47,17 @@ that must survive belongs in a repository, not here.
 Run when the operator asks to free disk space, prune scratch, or clean up.
 
 ```bash
-scripts/scratch-sweep.sh                  # report: what is reclaimable and why
+scripts/scratch-sweep.sh                  # dry run: what is reclaimable and why
+scripts/scratch-sweep.sh --dry-run        # identical; reporting is the default
 scripts/scratch-sweep.sh --older-than 14  # be stricter about what counts as idle
 scripts/scratch-sweep.sh --apply          # delete the reclaimable set
 ```
 
 **The sequence is fixed, and the confirmation is not optional:**
 
-1. Run it with **no flags**. It prints available disk space, then classifies
-   every entry as `KEEP` (with the reason) or `FREE` (with its size).
+1. Run it with **no flags** — that is the dry run. It prints available disk
+   space, then classifies every entry as `KEEP` (with the reason) or `FREE`
+   (with its size). Nothing is deleted.
 2. **Show the operator the proposal** — space now, entries and total to reclaim,
    and what is being kept. Do not summarise away the keep reasons; those are what
    make the proposal reviewable.

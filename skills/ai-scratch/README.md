@@ -20,9 +20,12 @@ boring.
 ## Cleanup in one line
 
 ```bash
-scripts/scratch-sweep.sh            # propose
+scripts/scratch-sweep.sh            # dry run (the default) — propose only
 scripts/scratch-sweep.sh --apply    # after the operator confirms
 ```
+
+Reporting is the default, so there is no way to delete by forgetting a flag.
+`--dry-run` / `-n` are accepted for readability and change nothing.
 
 An entry is reclaimable only when it is not `.prrq`, has not been modified inside
 the idle window (7 days by default), and is not a git repo holding uncommitted
