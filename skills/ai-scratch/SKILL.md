@@ -6,15 +6,40 @@ description: Use the designated AI scratch directory for PR-review clones, gener
 # AI Scratch
 
 There is one designated directory for work that is not part of any project
-checkout:
+checkout. Ask where it is rather than assuming:
 
+```bash
+scripts/scratch-setup.sh          # resolved root, and which source set it
 ```
-~/devel/portaj/ai-scratch
-```
+
+Resolution order, highest first: `--root` → `$AI_SCRATCH_ROOT` →
+`~/.ai-scratch/config` → `/tmp/ai-scratch`. The built-in default is a
+*subdirectory* of `/tmp`, never `/tmp` itself — that directory holds files this
+tool did not create.
 
 Treat it as **quasi-ephemeral**: durable enough to hold a review clone across a
 multi-hour session, not durable enough to be the only copy of anything. Anything
 that must survive belongs in a repository, not here.
+
+## First run — configure it, do not guess
+
+If `scratch-setup.sh` reports **NOT CONFIGURED**, it prints a recommendation: an
+existing populated scratch directory if it finds one, otherwise the ephemeral
+default.
+
+**Present that recommendation and ask.** The operator answers one of three ways:
+
+| Answer | Do |
+| --- | --- |
+| yes | `scripts/scratch-setup.sh --set <recommended path>` |
+| a different path | `scripts/scratch-setup.sh --set <their path>` |
+| no | Leave it unconfigured; the built-in default applies. Do not write config. |
+
+Never write the config without an explicit answer — it decides where a
+destructive sweep will later point. `--set` refuses `/`, `$HOME`, `/tmp`,
+`/var/tmp`, and any path shallower than two levels.
+
+`--idle-days N` sets the default idle window used by the sweep.
 
 ## What goes here
 
@@ -49,6 +74,7 @@ Run when the operator asks to free disk space, prune scratch, or clean up.
 ```bash
 scripts/scratch-sweep.sh                  # dry run: what is reclaimable and why
 scripts/scratch-sweep.sh --dry-run        # identical; reporting is the default
+scripts/scratch-sweep.sh --verbose        # list every kept entry, not a summary
 scripts/scratch-sweep.sh --older-than 14  # be stricter about what counts as idle
 scripts/scratch-sweep.sh --apply          # delete the reclaimable set
 ```
@@ -56,8 +82,10 @@ scripts/scratch-sweep.sh --apply          # delete the reclaimable set
 **The sequence is fixed, and the confirmation is not optional:**
 
 1. Run it with **no flags** — that is the dry run. It prints available disk
-   space, then classifies every entry as `KEEP` (with the reason) or `FREE`
-   (with its size). Nothing is deleted.
+   space, every `FREE` entry with its size, and the kept entries **grouped by
+   reason**. Nothing is deleted. Use `--verbose` when the operator wants each
+   kept entry listed individually; at a thousand-plus entries the grouped form is
+   the readable one.
 2. **Show the operator the proposal** — space now, entries and total to reclaim,
    and what is being kept. Do not summarise away the keep reasons; those are what
    make the proposal reviewable.

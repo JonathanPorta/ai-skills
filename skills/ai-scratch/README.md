@@ -14,8 +14,23 @@ boring.
 ## Contents
 
 - `SKILL.md` — where scratch lives, what belongs there, and the cleanup protocol.
+- `scripts/scratch-setup.sh` — show or set the scratch root; recommends one and
+  asks before writing anything.
 - `scripts/scratch-sweep.sh` — reports reclaimable entries; deletes only with
   `--apply`.
+
+## Configuration
+
+Resolution order, highest first:
+
+1. `--root`
+2. `$AI_SCRATCH_ROOT`
+3. `~/.ai-scratch/config` (`AI_SCRATCH_ROOT`, `AI_SCRATCH_IDLE_DAYS`)
+4. `/tmp/ai-scratch`
+
+The built-in default is a subdirectory of `/tmp`, never `/tmp` itself — sweeping
+a shared temp directory would reach files this tool did not create. `--set`
+refuses `/`, `$HOME`, `/tmp`, `/var/tmp`, and anything shallower than two levels.
 
 ## Cleanup in one line
 

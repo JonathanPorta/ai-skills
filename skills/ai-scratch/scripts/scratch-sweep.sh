@@ -12,16 +12,29 @@
 #
 set -uo pipefail
 
-ROOT="${AI_SCRATCH_ROOT:-$HOME/devel/portaj/ai-scratch}"
-OLDER_THAN=7
+# Resolution order, highest first: --root, $AI_SCRATCH_ROOT, ~/.ai-scratch/config,
+# then /tmp/ai-scratch. The built-in default is a SUBDIRECTORY of /tmp, never /tmp
+# itself -- /tmp holds files this tool did not create, and on macOS it is a
+# symlink the containment guard refuses anyway.
+CONFIG="${AI_SCRATCH_CONFIG_DIR:-$HOME/.ai-scratch}/config"
+cfg() { [ -f "$CONFIG" ] || return 0; sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$CONFIG" | tail -1; }
+
+CFG_ROOT="$(cfg AI_SCRATCH_ROOT)"; CFG_IDLE="$(cfg AI_SCRATCH_IDLE_DAYS)"
+ROOT="${AI_SCRATCH_ROOT:-${CFG_ROOT:-/tmp/ai-scratch}}"
+ROOT_SRC="built-in default"
+[ -n "$CFG_ROOT" ] && ROOT_SRC="config"
+[ -n "${AI_SCRATCH_ROOT:-}" ] && ROOT_SRC="environment"
+OLDER_THAN="${CFG_IDLE:-7}"
 APPLY=0
+VERBOSE=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --older-than) OLDER_THAN="${2:-}"; shift 2;;
     --older-than=*) OLDER_THAN="${1#*=}"; shift;;
-    --root) ROOT="${2:-}"; shift 2;;
-    --root=*) ROOT="${1#*=}"; shift;;
+    --root) ROOT="${2:-}"; ROOT_SRC="--root"; shift 2;;
+    --root=*) ROOT="${1#*=}"; ROOT_SRC="--root"; shift;;
+    -v|--verbose) VERBOSE=1; shift;;
     --apply) APPLY=1; shift;;
     # Accepted and explicitly a no-op: reporting is already the default, and a
     # safety flag that errors out is a bad surprise on a destructive tool.
@@ -50,21 +63,28 @@ human() { awk -v k="$1" 'BEGIN{split("KB MB GB TB",u," ");i=1;while(k>=1024&&i<4
 
 printf '\n=== disk before ===\n'
 df -h "$ROOT_REAL" | sed -n '1p;2p'
-printf '\nScratch root: %s\n' "$ROOT_REAL"
+printf '\nScratch root: %s  (%s)\n' "$ROOT_REAL" "$ROOT_SRC"
 printf 'Idle threshold: %s days\n\n' "$OLDER_THAN"
 
 reclaim_list=""; reclaim_kb=0; reclaim_n=0
 keep_n=0; keep_kb=0
+keep_tally=""   # one "<reason>\t<kb>" line per kept entry; grouped at the end
 
 for entry in "$ROOT_REAL"/* "$ROOT_REAL"/.[!.]*; do
   [ -e "$entry" ] || continue
   base="${entry##*/}"
 
   # Never follow a symlink out of the root, and never delete the link target.
-  if [ -L "$entry" ]; then keep_n=$((keep_n+1)); printf '  KEEP  %-44s symlink\n' "$base"; continue; fi
+  if [ -L "$entry" ]; then
+    keep_n=$((keep_n+1)); keep_tally="$keep_tally"$'symlink\t0\n'
+    [ "$VERBOSE" = 1 ] && printf '  KEEP  %-44s %-10s symlink\n' "$base" "-"
+    continue
+  fi
 
   real="$(cd "$(dirname "$entry")" && pwd -P)/$base"
-  case "$real" in "$ROOT_REAL"/*) : ;; *) printf '  KEEP  %-44s outside scratch root\n' "$base"; keep_n=$((keep_n+1)); continue;; esac
+  case "$real" in "$ROOT_REAL"/*) : ;; *)
+    printf '  KEEP  %-44s outside scratch root\n' "$base"; keep_n=$((keep_n+1))
+    keep_tally="$keep_tally"$'outside scratch root\t0\n'; continue;; esac
 
   reason=""
 
@@ -92,13 +112,20 @@ for entry in "$ROOT_REAL"/* "$ROOT_REAL"/.[!.]*; do
 
   if [ -n "$reason" ]; then
     keep_n=$((keep_n+1)); keep_kb=$((keep_kb+kb))
-    printf '  KEEP  %-44s %-10s %s\n' "$base" "$(human "$kb")" "$reason"
+    keep_tally="$keep_tally$reason"$'\t'"$kb"$'\n'
+    [ "$VERBOSE" = 1 ] && printf '  KEEP  %-44s %-10s %s\n' "$base" "$(human "$kb")" "$reason"
   else
     reclaim_n=$((reclaim_n+1)); reclaim_kb=$((reclaim_kb+kb))
     reclaim_list="$reclaim_list$real"$'\n'
     printf '  FREE  %-44s %s\n' "$base" "$(human "$kb")"
   fi
 done
+
+printf '\n=== kept, by reason ===\n'
+printf '%s' "$keep_tally" | awk -F'\t' 'NF==2{n[$1]++; kb[$1]+=$2}
+  END{for(r in n){k=kb[r];split("KB MB GB TB",u," ");i=1;while(k>=1024&&i<4){k/=1024;i++}
+      printf "  %-28s %5d entries  %.1f%s\n", r, n[r], k, u[i]}}' | sort -k2 -rn
+[ "$VERBOSE" = 1 ] || printf '  (run with --verbose to list every kept entry)\n'
 
 printf '\n=== proposal ===\n'
 printf 'keep      %5s entries  %s\n' "$keep_n" "$(human "$keep_kb")"
