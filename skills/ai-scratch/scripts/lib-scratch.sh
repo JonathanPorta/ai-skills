@@ -62,10 +62,16 @@ scratch_objid() {  # <path>
 # reporting filesystem identity -- identical for every path on one volume, which
 # silently defeats the whole point of binding candidates to an inode. BSD stat
 # rejects -c outright, so this order is correct on both.
+# device:inode:ctime. The inode alone is NOT sufficient: on Linux an rmdir
+# followed by mkdir frequently REUSES the inode number, so a replaced directory
+# presented an identical dev:ino and was accepted as the approved object. ctime
+# changes whenever the inode is re-created or its metadata altered, which closes
+# that hole. macOS happened to allocate fresh inodes and hid this entirely --
+# Linux CI is what surfaced it.
 scratch_devino() {  # <path>
   local out
-  out="$(stat -c '%d:%i' -- "$1" 2>/dev/null)" && { printf '%s' "$out"; return 0; }
-  out="$(stat -f '%d:%i' -- "$1" 2>/dev/null)" && { printf '%s' "$out"; return 0; }
+  out="$(stat -c '%d:%i:%Z' -- "$1" 2>/dev/null)" && { printf '%s' "$out"; return 0; }
+  out="$(stat -f '%d:%i:%c' -- "$1" 2>/dev/null)" && { printf '%s' "$out"; return 0; }
   return 1
 }
 
@@ -127,7 +133,7 @@ scratch_hex_decode_exact() {  # <hex> -> assigns to SCRATCH_DECODED
 scratch_manifest_bad_records() {  # <file>
   LC_ALL=C awk -F'\t' '
     $1 == "candidate" {
-      if (NF != 4 || $2 !~ /^[0-9a-f]+$/ || $3 !~ /^[0-9]+:[0-9]+$/ || $4 !~ /^[0-9]+$/) bad++
+      if (NF != 4 || $2 !~ /^[0-9a-f]+$/ || $3 !~ /^[0-9]+:[0-9]+:[0-9]+$/ || $4 !~ /^[0-9]+$/) bad++
     }
     END { print bad + 0 }' "$1"
 }
