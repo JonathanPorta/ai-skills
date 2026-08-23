@@ -140,8 +140,8 @@ while IFS= read -r -d '' path; do
   [ "$base" = "." ] || [ "$base" = ".." ] && continue
 
   # The parent of a real candidate is the root itself, by identity not string.
-  parent_id="$(scratch_devino "$(dirname -- "$path")" 2>/dev/null)"
-  [ "$parent_id" = "$ROOT_ID" ] || continue
+  parent_id="$(scratch_devino "$(dirname -- "$path")" 2>/dev/null | cut -d: -f1,2)"
+  [ "$parent_id" = "${ROOT_ID%:*}" ] || continue
 
   reason="$(classify "$path" "$base")"
   kb="$(scratch_size_kb "$path")"; kb="${kb:-0}"
@@ -199,7 +199,9 @@ bad="$(scratch_manifest_bad_records "$body")"
 [ "${bad:-0}" -eq 0 ] || scratch_die "manifest contains $bad malformed candidate record(s)"
 
 m_rootid="$(sed -n 's/^rootid\t//p' "$MANIFEST" | tail -1)"
-[ "$m_rootid" = "$ROOT_ID" ] || scratch_die "manifest was written for a different directory (root identity changed)"
+# dev:inode only: the root's ctime moves whenever anything is created or removed
+# inside it, which is exactly what a sweep does.
+[ "${m_rootid%:*}" = "${ROOT_ID%:*}" ] || scratch_die "manifest was written for a different directory (root identity changed)"
 
 # Set drift: the approved candidates must equal what classification finds now.
 sed -n 's/^candidate\t//p' "$MANIFEST" | sort >"$WORK/approved"
@@ -234,7 +236,9 @@ while IFS="$(printf '\t')" read -r hexname devino kb; do
 
   now_id="$(scratch_devino "$target" 2>/dev/null)" || { printf '  SKIP  %s (vanished)\n' "$shown"; skipped=$((skipped+1)); continue; }
   [ "$now_id" = "$devino" ] || { printf '  SKIP  %s (replaced since approval)\n' "$shown"; skipped=$((skipped+1)); continue; }
-  [ "$(scratch_devino "$(dirname -- "$target")")" = "$ROOT_ID" ] || { printf '  SKIP  %s (not a child of the root)\n' "$shown"; skipped=$((skipped+1)); continue; }
+  # dev:inode only: creating the staging directory inside the root updates the
+  # ROOT's ctime, so comparing the full triple would reject every candidate.
+  [ "$(scratch_devino "$(dirname -- "$target")" | cut -d: -f1,2)" = "${ROOT_ID%:*}" ] || { printf '  SKIP  %s (not a child of the root)\n' "$shown"; skipped=$((skipped+1)); continue; }
   late="$(classify "$target" "$name")"
   [ -z "$late" ] || { printf '  SKIP  %s (%s)\n' "$shown" "$late"; skipped=$((skipped+1)); continue; }
 
@@ -242,8 +246,10 @@ while IFS="$(printf '\t')" read -r hexname devino kb; do
   mv -- "$target" "$staged" 2>/dev/null || { printf '  SKIP  %s (could not stage)\n' "$shown"; skipped=$((skipped+1)); continue; }
 
   # The decisive check, after the object can no longer be swapped under us.
+  # Compare dev:inode only here: renaming an object legitimately updates its
+  # ctime, so the full triple would mismatch on every successful stage.
   staged_id="$(scratch_devino "$staged" 2>/dev/null)"
-  if [ "$staged_id" != "$devino" ]; then
+  if [ "${staged_id%:*}" != "${devino%:*}" ]; then
     mv -- "$staged" "$target" 2>/dev/null || printf '  WARN  %s could not be restored; it is in %s\n' "$shown" "$QUAR" >&2
     printf '  SKIP  %s (identity changed at the deletion boundary)\n' "$shown"; skipped=$((skipped+1)); continue
   fi
