@@ -100,7 +100,7 @@ class TestFilenameSafety(ScratchFixture):
 
         out = self.sweep().stdout
         # Hidden entries are kept; the rest are offered exactly once each.
-        self.assertIn("tab\tname", out)
+        self.assertIn("tab\\x09name", out)   # rendered inert, not raw
         self.assertIn("glob*name", out)
         self.assertIn("space name", out)
         self.assertEqual(out.count("FREE  plain"), 1)
@@ -267,6 +267,98 @@ class TestRootIdentityAndOptions(ScratchFixture):
             with self.subTest(args=args):
                 self.sweep(*args)
                 self.assertTrue((self.root / "old").exists())
+
+
+class TestFailClosedDiscovery(ScratchFixture):
+    """Round two: discovery and Git failures must not fail open."""
+
+    def test_repository_deeper_than_any_fixed_search_cap(self):
+        deep = self.root / "deep" / "1" / "2" / "3" / "4" / "5" / "6" / "7" / "repo"
+        new_repo(deep)
+        backdate(self.root)
+        self.assertNotIn("FREE  deep", self.sweep().stdout)
+
+    def test_repository_with_a_corrupt_index_is_kept(self):
+        # git status exits 128 with EMPTY stdout here. Testing only the output
+        # reads that as "clean" and deletes work nobody can see.
+        remote = self.tmp / "rem.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+        repo = self.root / "corrupt"
+        new_repo(repo)
+        git(repo, "remote", "add", "origin", str(remote))
+        git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
+        (repo / ".git" / "index").write_text("garbage")
+        backdate(self.root)
+
+        out = self.sweep("--verbose").stdout
+        self.assertNotIn("FREE  corrupt", out)
+        self.assertIn("fail closed", out)
+
+    def test_bare_repository_is_kept(self):
+        subprocess.run(["git", "init", "-q", "--bare", str(self.root / "bare")], check=True)
+        backdate(self.root)
+        self.assertNotIn("FREE  bare", self.sweep().stdout)
+
+    def test_protected_name_containing_a_space_is_honoured(self):
+        cfg = tempfile.mkdtemp(prefix="scratch-cfg-")
+        (self.root / "space name").mkdir()
+        backdate(self.root)
+        run(SETUP, "--protect", "space name", env_extra={"AI_SCRATCH_CONFIG_DIR": cfg})
+
+        out = run(SWEEP, "--root", str(self.root), "--verbose",
+                  env_extra={"AI_SCRATCH_CONFIG_DIR": cfg}).stdout
+        self.assertIn("pinned by", out)
+        self.assertNotIn("FREE  space name", out)
+
+
+class TestReviewSurfaceIntegrity(ScratchFixture):
+    """The operator must be able to trust what the proposal shows."""
+
+    def test_hostile_names_cannot_forge_or_inflate_the_proposal(self):
+        (self.root / "forged\nFREE  fake-entry").mkdir()
+        (self.root / "esc\x1b[31mred").mkdir()
+        (self.root / "normal").mkdir()
+        backdate(self.root)
+
+        out = self.sweep().stdout
+        lines = [ln for ln in out.splitlines() if ln.startswith("  FREE  ")]
+        self.assertEqual(len(lines), 3, "a name forged an extra proposal line")
+        self.assertIn("reclaim       3", out)
+        self.assertNotIn("\x1b[31m", out, "an escape sequence reached the terminal raw")
+
+    def test_manifest_records_are_structurally_exact(self):
+        (self.root / "weird\nname").mkdir()
+        (self.root / "plain").mkdir()
+        backdate(self.root)
+
+        manifest = Path(self.manifest_from_dry_run()).read_text()
+        records = [ln for ln in manifest.splitlines() if ln.startswith("candidate\t")]
+        self.assertEqual(len(records), 2)
+        for record in records:
+            self.assertRegex(record, r"^candidate\t[0-9a-f]+\t[0-9]+:[0-9]+\t[0-9]+$")
+
+    def test_malformed_manifest_record_is_refused(self):
+        (self.root / "old").mkdir()
+        backdate(self.root)
+        manifest = Path(self.manifest_from_dry_run())
+        manifest.write_text(manifest.read_text() + "candidate\tnothex\tbad\tx\n")
+
+        result = self.sweep("--apply", "--manifest", str(manifest))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.root / "old").exists())
+
+
+class TestObjectIdentity(unittest.TestCase):
+    """Inode identity must distinguish objects on this platform."""
+
+    def test_two_files_have_different_identities(self):
+        lib = SCRIPTS / "lib-scratch.sh"
+        with tempfile.NamedTemporaryFile() as a, tempfile.NamedTemporaryFile() as b:
+            script = f'. "{lib}"; printf "%s %s" "$(scratch_devino {a.name})" "$(scratch_devino {b.name})"'
+            out = subprocess.run(["bash", "-c", script], capture_output=True, text=True).stdout
+            first, second = out.split()
+            self.assertNotEqual(first, second,
+                                "stat reported filesystem identity, not object identity")
 
 
 if __name__ == "__main__":

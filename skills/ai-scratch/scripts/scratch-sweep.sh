@@ -22,11 +22,11 @@ EXPLICIT_ROOT=""; OLDER_THAN=""; APPLY=0; VERBOSE=0; MANIFEST=""; OUT_MANIFEST="
 while [ $# -gt 0 ]; do
   case "$1" in
     --root)        scratch_need_value $# "--root";        EXPLICIT_ROOT="$2"; shift 2;;
-    --root=*)      EXPLICIT_ROOT="${1#*=}"; shift;;
+    --root=*)      EXPLICIT_ROOT="${1#*=}"; [ -n "$EXPLICIT_ROOT" ] || scratch_die "--root requires a value" 2; shift;;
     --older-than)  scratch_need_value $# "--older-than";  OLDER_THAN="$2"; shift 2;;
-    --older-than=*) OLDER_THAN="${1#*=}"; shift;;
+    --older-than=*) OLDER_THAN="${1#*=}"; [ -n "$OLDER_THAN" ] || scratch_die "--older-than requires a value" 2; shift;;
     --manifest)    scratch_need_value $# "--manifest";    MANIFEST="$2"; shift 2;;
-    --manifest=*)  MANIFEST="${1#*=}"; shift;;
+    --manifest=*)  MANIFEST="${1#*=}"; [ -n "$MANIFEST" ] || scratch_die "--manifest requires a value" 2; shift;;
     --apply)       APPLY=1; shift;;
     -n|--dry-run)  APPLY=0; shift;;
     -v|--verbose)  VERBOSE=1; shift;;
@@ -62,9 +62,9 @@ classify() {  # <abs-path> <base-name>
   # nothing about.
   case "$base" in .*) printf 'hidden entry (state by convention)'; return 0;; esac
 
-  for p in $PROTECT_EXTRA; do
-    [ "$base" = "$p" ] && { printf 'pinned by AI_SCRATCH_PROTECT'; return 0; }
-  done
+  if scratch_protect_matches "$base" "$PROTECT_EXTRA"; then
+    printf 'pinned by AI_SCRATCH_PROTECT'; return 0
+  fi
 
   [ -L "$path" ] && { printf 'symlink'; return 0; }
   [ -d "$path" ] || { printf 'not a directory'; return 0; }
@@ -76,35 +76,59 @@ classify() {  # <abs-path> <base-name>
     printf 'active within %sd' "$OLDER_THAN"; return 0
   fi
 
-  # Every repository inside the candidate, not just one at the top. .git is a
-  # directory in a clone and a FILE in a linked worktree; both count.
-  local gits found=0
-  gits="$(find "$path" -name .git -maxdepth 6 -print 2>/dev/null)"
-  [ -d "$path/.git" ] || [ -f "$path/.git" ] || [ -n "$gits" ] || { printf ''; return 1; }
+  # Every repository inside the candidate, at ANY depth. No cap: a depth limit is
+  # an undocumented promise that sole-copy work never lives deeper than N.
+  #
+  # Two shapes are searched. A working tree has .git -- a directory in a clone, a
+  # FILE in a linked worktree. A bare repository has neither, so directories
+  # holding HEAD + objects + refs count too. Paths inside a .git are skipped:
+  # matching .git/HEAD and .git/logs/HEAD would make `git status` run somewhere
+  # it cannot work and fail every ordinary clone closed.
+  local repos="" g d repo seen=""
 
-  local g repo
   while IFS= read -r g; do
     [ -n "$g" ] || continue
-    found=1
-    repo="$(dirname -- "$g")"
-    # Fail closed: a repository we cannot interrogate is a repository we cannot
-    # declare safe to delete.
-    if ! git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then
-      printf 'unreadable git repo (fail closed)'; return 0
-    fi
-    if [ -n "$(git -C "$repo" status --porcelain 2>/dev/null)" ]; then
-      printf 'uncommitted changes'; return 0
-    fi
-    # Local commits not reachable from any remote. --all covers branches and
-    # tags; HEAD is added explicitly so a detached HEAD is not invisible.
-    local unpushed
-    unpushed="$(git -C "$repo" rev-list --count --all HEAD --not --remotes 2>/dev/null)"
-    if [ -z "$unpushed" ]; then printf 'git rev-list failed (fail closed)'; return 0; fi
-    if [ "$unpushed" -gt 0 ]; then printf 'unpushed commits'; return 0; fi
+    case "$g" in */.git/*) continue;; esac
+    repos="$repos$(dirname -- "$g")
+"
   done <<EOF
-$gits
+$(find "$path" -name .git -print 2>/dev/null)
 EOF
-  [ "$found" = 1 ] && { printf ''; return 1; }
+
+  while IFS= read -r g; do
+    [ -n "$g" ] || continue
+    case "$g" in */.git/*) continue;; esac
+    d="$(dirname -- "$g")"
+    if [ -f "$d/HEAD" ] && [ -d "$d/refs" ]; then repos="$repos$d
+"; fi
+  done <<EOF
+$(find "$path" -type d -name objects -print 2>/dev/null)
+EOF
+
+  while IFS= read -r repo; do
+    [ -n "$repo" ] || continue
+    case "$seen" in *"[$repo]"*) continue;; esac
+    seen="$seen[$repo]"
+
+    git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || continue
+
+    # Every git status is checked, not just its output. A corrupt index makes
+    # `status` exit 128 with EMPTY stdout: testing only the output would read
+    # that as "clean" and delete unobservable work.
+    local out rc
+    out="$(git -C "$repo" status --porcelain 2>/dev/null)"; rc=$?
+    [ "$rc" -eq 0 ] || { printf 'git status failed (fail closed)'; return 0; }
+    [ -n "$out" ] && { printf 'uncommitted changes'; return 0; }
+
+    # Local commits reachable from no remote. --all covers branches and tags;
+    # HEAD is named explicitly so a detached HEAD is not invisible.
+    out="$(git -C "$repo" rev-list --count --all HEAD --not --remotes 2>/dev/null)"; rc=$?
+    [ "$rc" -eq 0 ] || { printf 'git rev-list failed (fail closed)'; return 0; }
+    case "$out" in ''|*[!0-9]*) printf 'git rev-list unreadable (fail closed)'; return 0;; esac
+    [ "$out" -gt 0 ] && { printf 'unpushed commits'; return 0; }
+  done <<EOF
+$repos
+EOF
   printf ''; return 1
 }
 
@@ -128,15 +152,15 @@ while IFS= read -r -d '' path; do
   [ "$parent_id" = "$ROOT_ID" ] || continue
 
   reason="$(classify "$path" "$base")"
-  kb="$(du -sk "$path" 2>/dev/null | awk '{print $1}')"; kb="${kb:-0}"
+  kb="$(scratch_size_kb "$path")"; kb="${kb:-0}"
 
   if [ -n "$reason" ]; then
     printf '%s\t%s\n' "$reason" "$kb" >>"$WORK/keeps"
-    [ "$VERBOSE" = 1 ] && printf '  KEEP  %-44s %-10s %s\n' "$base" "$(human "$kb")" "$reason"
+    [ "$VERBOSE" = 1 ] && printf '  KEEP  %-44s %-10s %s\n' "$(scratch_display_name "$base")" "$(human "$kb")" "$reason"
   else
     devino="$(scratch_devino "$path")" || continue
     printf '%s\t%s\t%s\n' "$(scratch_hex_encode "$base")" "$devino" "$kb" >>"$WORK/candidates"
-    printf '  FREE  %-44s %s\n' "$base" "$(human "$kb")"
+    printf '  FREE  %-44s %s\n' "$(scratch_display_name "$base")" "$(human "$kb")"
   fi
 done < <(find "$ROOT_REAL" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
 
@@ -176,6 +200,12 @@ claimed_sum="$(sed -n 's/^sum\t//p' "$MANIFEST" | tail -1)"
 body="$WORK/manifest.body"; grep -v '^sum	' "$MANIFEST" >"$body"
 [ "$(scratch_sha256 "$body")" = "$claimed_sum" ] || scratch_die "manifest checksum mismatch — it was modified after the dry run"
 
+# Every record must be structurally exact before it is trusted: hex name, a
+# dev:inode, and a size. A malformed line means the manifest is not the artifact
+# the dry run produced.
+bad="$(sed -n 's/^candidate\t//p' "$MANIFEST" | grep -cvE '^[0-9a-f]+\t[0-9]+:[0-9]+\t[0-9]+$' || true)"
+[ "${bad:-0}" -eq 0 ] || scratch_die "manifest contains $bad malformed candidate record(s)"
+
 m_rootid="$(sed -n 's/^rootid\t//p' "$MANIFEST" | tail -1)"
 [ "$m_rootid" = "$ROOT_ID" ] || scratch_die "manifest was written for a different directory (root identity changed)"
 
@@ -190,23 +220,46 @@ if ! diff -q "$WORK/approved" "$WORK/current" >/dev/null 2>&1; then
 fi
 
 printf '\n=== deleting ===\n'
-removed=0
+# Quarantine, then verify, then delete. Checking identity and immediately calling
+# rm -rf leaves a window in which the pathname can be replaced between the check
+# and the removal; the replacement is what gets deleted, and apply still reports
+# success. Renaming into a staging directory is atomic with respect to the name,
+# so whatever was moved is exactly what is then identified and removed -- and if
+# the moved object is not the approved one, it is put straight back.
+QUAR="$ROOT_REAL/.scratch-sweep-quarantine.$$"   # hidden, so classification skips it
+mkdir -p "$QUAR" || scratch_die "cannot stage removals in $ROOT_REAL"
+removed=0; skipped=0
+
 while IFS="$(printf '\t')" read -r hexname devino kb; do
   [ -n "$hexname" ] || continue
   name="$(scratch_hex_decode "$hexname")"
+  shown="$(scratch_display_name "$name")"
   target="$ROOT_REAL/$name"
 
-  # Revalidate immediately before removal: identity, parentage, and every keep
-  # rule. A same-path replacement or fresh activity aborts this entry.
-  now_id="$(scratch_devino "$target" 2>/dev/null)" || { printf '  SKIP  %s (vanished)\n' "$name"; continue; }
-  [ "$now_id" = "$devino" ] || { printf '  SKIP  %s (replaced since approval)\n' "$name"; continue; }
-  [ "$(scratch_devino "$(dirname -- "$target")")" = "$ROOT_ID" ] || { printf '  SKIP  %s (not a child of the root)\n' "$name"; continue; }
+  now_id="$(scratch_devino "$target" 2>/dev/null)" || { printf '  SKIP  %s (vanished)\n' "$shown"; skipped=$((skipped+1)); continue; }
+  [ "$now_id" = "$devino" ] || { printf '  SKIP  %s (replaced since approval)\n' "$shown"; skipped=$((skipped+1)); continue; }
+  [ "$(scratch_devino "$(dirname -- "$target")")" = "$ROOT_ID" ] || { printf '  SKIP  %s (not a child of the root)\n' "$shown"; skipped=$((skipped+1)); continue; }
   late="$(classify "$target" "$name")"
-  [ -z "$late" ] || { printf '  SKIP  %s (%s)\n' "$name" "$late"; continue; }
+  [ -z "$late" ] || { printf '  SKIP  %s (%s)\n' "$shown" "$late"; skipped=$((skipped+1)); continue; }
 
-  rm -rf -- "$target" && { printf '  removed %s\n' "$name"; removed=$((removed+1)); }
+  staged="$QUAR/$hexname"
+  mv -- "$target" "$staged" 2>/dev/null || { printf '  SKIP  %s (could not stage)\n' "$shown"; skipped=$((skipped+1)); continue; }
+
+  # The decisive check, after the object can no longer be swapped under us.
+  staged_id="$(scratch_devino "$staged" 2>/dev/null)"
+  if [ "$staged_id" != "$devino" ]; then
+    mv -- "$staged" "$target" 2>/dev/null
+    printf '  SKIP  %s (identity changed at the deletion boundary)\n' "$shown"; skipped=$((skipped+1)); continue
+  fi
+
+  rm -rf -- "$staged" && { printf '  removed %s\n' "$shown"; removed=$((removed+1)); }
 done <"$WORK/approved"
 
+rmdir "$QUAR" 2>/dev/null || rm -rf -- "$QUAR"
+[ "$skipped" -gt 0 ] && printf '\nINCOMPLETE — %s approved entries were skipped and remain on disk.\n' "$skipped"
+
 printf '\nRemoved %s of %s approved entries.\n' "$removed" "$(wc -l <"$WORK/approved" | tr -d ' ')"
+[ "$skipped" -gt 0 ] && EXIT_CODE=1 || EXIT_CODE=0
 printf '\n=== disk after ===\n'
 df -h "$ROOT_REAL" | sed -n '1p;2p'
+exit "${EXIT_CODE:-0}"

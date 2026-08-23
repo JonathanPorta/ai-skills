@@ -57,10 +57,16 @@ scratch_objid() {  # <path>
   ls -di -- "$1" 2>/dev/null | awk '{print $1}' | tr -d ' '
 }
 
+# GNU stat is tried FIRST and deliberately. GNU's -f means --file-system and
+# takes no format argument, so a BSD-first probe SUCCEEDS on Linux while
+# reporting filesystem identity -- identical for every path on one volume, which
+# silently defeats the whole point of binding candidates to an inode. BSD stat
+# rejects -c outright, so this order is correct on both.
 scratch_devino() {  # <path>
   local out
-  out="$(stat -f '%d:%i' -- "$1" 2>/dev/null)" || out="$(stat -c '%d:%i' -- "$1" 2>/dev/null)" || return 1
-  printf '%s' "$out"
+  out="$(stat -c '%d:%i' -- "$1" 2>/dev/null)" && { printf '%s' "$out"; return 0; }
+  out="$(stat -f '%d:%i' -- "$1" 2>/dev/null)" && { printf '%s' "$out"; return 0; }
+  return 1
 }
 
 # Hex, not base64: encoding flags differ across platforms, hex does not. Used so
@@ -76,6 +82,48 @@ scratch_sha256() {  # <file>
   if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
   elif command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
   else printf 'nosum'; fi
+}
+
+# Names are stored hex-encoded and compared hex-to-hex, so a protected entry
+# containing a space or glob is one exact record rather than several word-split
+# fragments that match nothing.
+scratch_protect_matches() {  # <name> <hex-list>
+  local want h
+  want="$(scratch_hex_encode "$1")"
+  for h in $2; do [ "$h" = "$want" ] && return 0; done
+  return 1
+}
+
+# Render a filename safely for a human to review. Control characters become
+# visible escapes so a newline cannot forge a line and an ESC cannot move the
+# cursor or colour the operator's terminal.
+scratch_display_name() {  # <name>
+  printf '%s' "$1" | LC_ALL=C awk '{
+    out=""
+    for (i = 1; i <= length($0); i++) {
+      c = substr($0, i, 1); v = index(SAFE, c)
+      if (c == "\\") out = out "\\\\"
+      else if (v > 0) out = out c
+      else out = out sprintf("\\x%02x", ord(c))
+    }
+    printf "%s", out
+  }
+  function ord(ch,   i) { for (i = 0; i < 256; i++) if (sprintf("%c", i) == ch) return i; return 63 }
+  BEGIN { SAFE = " !\"#$%&'"'"'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~" }' 2>/dev/null
+  # awk sees only the first line of a multi-line name, so say so explicitly.
+  # The newline must come from a literal, not $(printf '\n') -- command
+  # substitution strips trailing newlines, leaving a pattern that matches
+  # everything and marks every name as multi-line.
+  local _nl='
+'
+  case "$1" in *"$_nl"*) printf '\\n...' ;; esac
+}
+
+# Size without parsing a pathname. du prints "<size>\t<path>"; a newline inside
+# the path spills onto further lines, so only the first line's first field is
+# trustworthy.
+scratch_size_kb() {  # <path>
+  du -sk -- "$1" 2>/dev/null | head -1 | awk '{print $1+0}'
 }
 
 scratch_config_path() { printf '%s/config' "${AI_SCRATCH_CONFIG_DIR:-$HOME/.ai-scratch}"; }

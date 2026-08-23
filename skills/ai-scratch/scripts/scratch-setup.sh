@@ -20,13 +20,13 @@ set_root=""; set_idle=""; set_protect=""; explicit_root=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --set)          scratch_need_value $# "--set";        set_root="$2"; shift 2;;
-    --set=*)        set_root="${1#*=}"; shift;;
+    --set=*) set_root="${1#*=}"; [ -n "$set_root" ] || scratch_die "--set requires a value" 2; shift;;
     --root)         scratch_need_value $# "--root";       explicit_root="$2"; shift 2;;
-    --root=*)       explicit_root="${1#*=}"; shift;;
+    --root=*) explicit_root="${1#*=}"; [ -n "$explicit_root" ] || scratch_die "--root requires a value" 2; shift;;
     --idle-days)    scratch_need_value $# "--idle-days";  set_idle="$2"; shift 2;;
-    --idle-days=*)  set_idle="${1#*=}"; shift;;
+    --idle-days=*) set_idle="${1#*=}"; [ -n "$set_idle" ] || scratch_die "--idle-days requires a value" 2; shift;;
     --protect)      scratch_need_value $# "--protect";    set_protect="$2"; shift 2;;
-    --protect=*)    set_protect="${1#*=}"; shift;;
+    --protect=*) set_protect="${1#*=}"; [ -n "$set_protect" ] || scratch_die "--protect requires a value" 2; shift;;
     -h|--help)      sed -n '3,13p' "$0"; exit 0;;
     *) scratch_die "unknown option: $1" 2;;
   esac
@@ -67,9 +67,15 @@ fi
 
 if [ -n "$set_protect" ]; then
   scratch_text_is_sane "$set_protect" || scratch_die "that name contains control characters"
+  # Stored hex-encoded so a name containing a space or glob stays one exact
+  # record instead of word-splitting into fragments that match nothing.
   existing="$(scratch_config_get AI_SCRATCH_PROTECT)"
-  case " $existing " in *" $set_protect "*) : ;; *) existing="$existing${existing:+ }$set_protect";; esac
-  config_put AI_SCRATCH_PROTECT "$existing"
+  if scratch_protect_matches "$set_protect" "$existing"; then
+    printf 'already protected: %s\n' "$(scratch_display_name "$set_protect")"
+  else
+    existing="$existing${existing:+ }$(scratch_hex_encode "$set_protect")"
+    config_put AI_SCRATCH_PROTECT "$existing"
+  fi
 fi
 
 # --- report -----------------------------------------------------------------
@@ -80,7 +86,9 @@ protect="$(scratch_config_get AI_SCRATCH_PROTECT)"
 printf '\nscratch root : %s\n' "$SCRATCH_ROOT_RAW"
 printf 'source       : %s\n' "$SCRATCH_ROOT_SRC"
 printf 'idle window  : %s days (%s)\n' "${idle:-7}" "$([ -n "$idle" ] && echo config || echo default)"
-printf 'protected    : hidden entries, plus%s\n' "${protect:+ $protect}"
+shown_protect=""
+for h in $protect; do shown_protect="$shown_protect${shown_protect:+, }$(scratch_display_name "$(scratch_hex_decode "$h")")"; done
+printf 'protected    : hidden entries%s\n' "${shown_protect:+, plus $shown_protect}"
 printf 'config file  : %s%s\n' "$CONFIG" "$([ -f "$CONFIG" ] && printf '' || printf ' (not present)')"
 
 if canon="$(scratch_canonical "$SCRATCH_ROOT_RAW" 2>/dev/null)"; then
