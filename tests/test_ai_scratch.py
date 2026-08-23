@@ -361,5 +361,97 @@ class TestObjectIdentity(unittest.TestCase):
                                 "stat reported filesystem identity, not object identity")
 
 
+class TestPortabilityAndFraming(ScratchFixture):
+    """Round three: the failures that only appeared on Linux, or under
+    filenames that shell tooling cannot frame."""
+
+    def test_repository_below_a_newline_bearing_path_is_found(self):
+        deep = self.root / "weird\npath" / "repo"
+        new_repo(deep)
+        backdate(self.root)
+        out = self.sweep("--verbose").stdout
+        self.assertIn("unpushed commits", out)
+        self.assertNotIn("FREE  weird", out)
+
+    def test_distinct_names_do_not_render_identically(self):
+        (self.root / "a\nbc").mkdir()
+        (self.root / "ab\nc").mkdir()
+        backdate(self.root)
+        out = self.sweep().stdout
+        self.assertIn("a\\x0abc", out)
+        self.assertIn("ab\\x0ac", out)
+
+    def test_valid_manifest_is_accepted_and_applied(self):
+        # The Linux failure: `grep -E '\t'` reads GNU's \t as a literal "t",
+        # so every valid manifest was rejected as malformed.
+        (self.root / "idle-a").mkdir()
+        (self.root / "idle-b").mkdir()
+        backdate(self.root)
+        manifest = self.manifest_from_dry_run()
+        result = self.sweep("--apply", "--manifest", manifest)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.root / "idle-a").exists())
+
+    def test_malformed_record_inside_the_checksummed_body_is_refused(self):
+        (self.root / "old").mkdir()
+        backdate(self.root)
+        manifest = Path(self.manifest_from_dry_run())
+        lines = manifest.read_text().splitlines()
+        body = [ln for ln in lines if not ln.startswith("sum\t")]
+        body.append("candidate\tNOTHEX\tbad\tx")
+        tmp = manifest.parent / (manifest.name + ".body")
+        tmp.write_text("\n".join(body) + "\n")
+        digest = subprocess.run(["shasum", "-a", "256", str(tmp)],
+                                capture_output=True, text=True).stdout.split()[0]
+        manifest.write_text("\n".join(body) + f"\nsum\t{digest}\n")
+
+        result = self.sweep("--apply", "--manifest", str(manifest))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("malformed", result.stderr)
+        self.assertTrue((self.root / "old").exists())
+
+    def test_name_with_a_trailing_newline_round_trips(self):
+        (self.root / "trailing\n").mkdir()
+        (self.root / "other").mkdir()
+        backdate(self.root)
+        manifest = self.manifest_from_dry_run()
+        self.sweep("--apply", "--manifest", manifest)
+        self.assertFalse((self.root / "trailing\n").exists(),
+                         "a trailing newline was lost, so apply targeted the wrong path")
+
+
+class TestStagingIsExclusive(ScratchFixture):
+    """Staging must never adopt, or destroy, state it did not create."""
+
+    def test_preexisting_hidden_directory_is_not_adopted_or_deleted(self):
+        stale = self.root / ".scratch-sweep-quarantine.999" / "precious"
+        stale.mkdir(parents=True)
+        (stale / "data").write_text("unapproved\n")
+        (self.root / "idle").mkdir()
+        backdate(self.root)
+
+        manifest = self.manifest_from_dry_run()
+        self.sweep("--apply", "--manifest", manifest)
+
+        self.assertTrue((stale / "data").exists(),
+                        "cleanup destroyed a pre-existing hidden directory")
+        self.assertFalse((self.root / "idle").exists())
+
+    def test_apply_reports_incomplete_and_nonzero_when_an_entry_is_skipped(self):
+        (self.root / "one").mkdir()
+        (self.root / "two").mkdir()
+        backdate(self.root)
+        manifest = self.manifest_from_dry_run()
+        # Replace one approved object so it must be skipped.
+        shutil.rmtree(self.root / "two")
+        (self.root / "two").mkdir()
+        backdate(self.root)
+
+        result = self.sweep("--apply", "--manifest", manifest)
+        # Set drift is detected first; either way nothing may be silently lost.
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.root / "two").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

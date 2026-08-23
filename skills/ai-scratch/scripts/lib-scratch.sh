@@ -94,29 +94,42 @@ scratch_protect_matches() {  # <name> <hex-list>
   return 1
 }
 
-# Render a filename safely for a human to review. Control characters become
-# visible escapes so a newline cannot forge a line and an ESC cannot move the
-# cursor or colour the operator's terminal.
+# Render a filename byte-accurately for review. Every byte is either printed or
+# shown as \xNN AT ITS ACTUAL POSITION, so distinct names cannot collide: an
+# earlier version escaped only the first line, rendering "a\nbc" and "ab\nc"
+# identically. No GNU-only awk features (no strtonum): the hex table is built in
+# BEGIN so this behaves the same under BSD and GNU awk.
 scratch_display_name() {  # <name>
-  printf '%s' "$1" | LC_ALL=C awk '{
-    out=""
-    for (i = 1; i <= length($0); i++) {
-      c = substr($0, i, 1); v = index(SAFE, c)
-      if (c == "\\") out = out "\\\\"
-      else if (v > 0) out = out c
-      else out = out sprintf("\\x%02x", ord(c))
+  printf '%s' "$1" | od -An -v -tx1 | LC_ALL=C awk '
+    BEGIN { for (i = 0; i < 16; i++) H[sprintf("%x", i)] = i }
+    {
+      for (f = 1; f <= NF; f++) {
+        v = H[substr($f, 1, 1)] * 16 + H[substr($f, 2, 2)]
+        if (v == 92) printf "\\\\"
+        else if (v >= 32 && v < 127) printf "%c", v
+        else printf "\\x%02x", v
+      }
+    }'
+}
+
+# Decode without losing a trailing newline. Command substitution strips them, so
+# a sentinel byte is appended inside the substitution and removed after; without
+# this, a name ending in a newline decodes short and apply targets the wrong
+# path.
+scratch_hex_decode_exact() {  # <hex> -> assigns to SCRATCH_DECODED
+  SCRATCH_DECODED="$(scratch_hex_decode "$1"; printf 'X')"
+  SCRATCH_DECODED="${SCRATCH_DECODED%X}"
+}
+
+# Count structurally invalid candidate records. awk -F'\t' splits on a real tab
+# on every platform; `grep -E '\t'` does not -- GNU reads it as a literal "t",
+# which rejected every valid manifest on Linux while passing on macOS.
+scratch_manifest_bad_records() {  # <file>
+  LC_ALL=C awk -F'\t' '
+    $1 == "candidate" {
+      if (NF != 4 || $2 !~ /^[0-9a-f]+$/ || $3 !~ /^[0-9]+:[0-9]+$/ || $4 !~ /^[0-9]+$/) bad++
     }
-    printf "%s", out
-  }
-  function ord(ch,   i) { for (i = 0; i < 256; i++) if (sprintf("%c", i) == ch) return i; return 63 }
-  BEGIN { SAFE = " !\"#$%&'"'"'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~" }' 2>/dev/null
-  # awk sees only the first line of a multi-line name, so say so explicitly.
-  # The newline must come from a literal, not $(printf '\n') -- command
-  # substitution strips trailing newlines, leaving a pattern that matches
-  # everything and marks every name as multi-line.
-  local _nl='
-'
-  case "$1" in *"$_nl"*) printf '\\n...' ;; esac
+    END { print bad + 0 }' "$1"
 }
 
 # Size without parsing a pathname. du prints "<size>\t<path>"; a newline inside

@@ -76,59 +76,50 @@ classify() {  # <abs-path> <base-name>
     printf 'active within %sd' "$OLDER_THAN"; return 0
   fi
 
-  # Every repository inside the candidate, at ANY depth. No cap: a depth limit is
-  # an undocumented promise that sole-copy work never lives deeper than N.
+  # Every repository inside the candidate, at ANY depth, enumerated NUL-delimited.
+  # A newline-delimited list splits a repository living under a newline-bearing
+  # path into nonexistent fragments, and a silent `continue` on the resulting
+  # failure is indistinguishable from "no repository here".
   #
-  # Two shapes are searched. A working tree has .git -- a directory in a clone, a
-  # FILE in a linked worktree. A bare repository has neither, so directories
+  # Two shapes are searched. A working tree has .git -- a directory in a clone,
+  # a FILE in a linked worktree. A bare repository has neither, so directories
   # holding HEAD + objects + refs count too. Paths inside a .git are skipped:
-  # matching .git/HEAD and .git/logs/HEAD would make `git status` run somewhere
-  # it cannot work and fail every ordinary clone closed.
-  local repos="" g d repo seen=""
+  # matching .git/HEAD and .git/logs/HEAD would run `git status` where it cannot
+  # work and fail every ordinary clone closed.
+  local markers="$SCRATCH_WORK/markers.$$"
+  : >"$markers"
+  find "$path" -name .git -print0 >>"$markers" 2>/dev/null \
+    || { printf 'repository discovery failed (fail closed)'; rm -f "$markers"; return 0; }
+  find "$path" -type d -name objects -print0 >>"$markers" 2>/dev/null \
+    || { printf 'repository discovery failed (fail closed)'; rm -f "$markers"; return 0; }
 
-  while IFS= read -r g; do
-    [ -n "$g" ] || continue
-    case "$g" in */.git/*) continue;; esac
-    repos="$repos$(dirname -- "$g")
-"
-  done <<EOF
-$(find "$path" -name .git -print 2>/dev/null)
-EOF
-
-  while IFS= read -r g; do
-    [ -n "$g" ] || continue
-    case "$g" in */.git/*) continue;; esac
-    d="$(dirname -- "$g")"
-    if [ -f "$d/HEAD" ] && [ -d "$d/refs" ]; then repos="$repos$d
-"; fi
-  done <<EOF
-$(find "$path" -type d -name objects -print 2>/dev/null)
-EOF
-
-  while IFS= read -r repo; do
-    [ -n "$repo" ] || continue
+  local marker repo seen="" out rc
+  while IFS= read -r -d '' marker; do
+    [ -n "$marker" ] || continue
+    case "$marker" in */.git/*) continue;; esac
+    repo="$(dirname -- "$marker")"
+    case "$marker" in
+      */objects) [ -f "$repo/HEAD" ] && [ -d "$repo/refs" ] || continue;;
+    esac
     case "$seen" in *"[$repo]"*) continue;; esac
     seen="$seen[$repo]"
 
-    git -C "$repo" rev-parse --git-dir >/dev/null 2>&1 || continue
+    # A marker was found. From here every failure is KEEP, never a skip: an
+    # unreadable repository is precisely the case where deletion is unsafe.
+    if ! git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then
+      rm -f "$markers"; printf 'git repo present but unreadable (fail closed)'; return 0
+    fi
 
-    # Every git status is checked, not just its output. A corrupt index makes
-    # `status` exit 128 with EMPTY stdout: testing only the output would read
-    # that as "clean" and delete unobservable work.
-    local out rc
     out="$(git -C "$repo" status --porcelain 2>/dev/null)"; rc=$?
-    [ "$rc" -eq 0 ] || { printf 'git status failed (fail closed)'; return 0; }
-    [ -n "$out" ] && { printf 'uncommitted changes'; return 0; }
+    [ "$rc" -eq 0 ] || { rm -f "$markers"; printf 'git status failed (fail closed)'; return 0; }
+    [ -n "$out" ] && { rm -f "$markers"; printf 'uncommitted changes'; return 0; }
 
-    # Local commits reachable from no remote. --all covers branches and tags;
-    # HEAD is named explicitly so a detached HEAD is not invisible.
     out="$(git -C "$repo" rev-list --count --all HEAD --not --remotes 2>/dev/null)"; rc=$?
-    [ "$rc" -eq 0 ] || { printf 'git rev-list failed (fail closed)'; return 0; }
-    case "$out" in ''|*[!0-9]*) printf 'git rev-list unreadable (fail closed)'; return 0;; esac
-    [ "$out" -gt 0 ] && { printf 'unpushed commits'; return 0; }
-  done <<EOF
-$repos
-EOF
+    [ "$rc" -eq 0 ] || { rm -f "$markers"; printf 'git rev-list failed (fail closed)'; return 0; }
+    case "$out" in ''|*[!0-9]*) rm -f "$markers"; printf 'git rev-list unreadable (fail closed)'; return 0;; esac
+    [ "$out" -gt 0 ] && { rm -f "$markers"; printf 'unpushed commits'; return 0; }
+  done <"$markers"
+  rm -f "$markers"
   printf ''; return 1
 }
 
@@ -138,6 +129,7 @@ printf '\nScratch root: %s  (%s)\n' "$ROOT_REAL" "$SCRATCH_ROOT_SRC"
 printf 'Idle threshold: %s days\n\n' "$OLDER_THAN"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/scratch-sweep.XXXXXX")" || exit 1
+SCRATCH_WORK="$WORK"
 trap 'rm -rf "$WORK"' EXIT
 : >"$WORK/candidates"   # hex-name<TAB>devino<TAB>kb
 : >"$WORK/keeps"        # reason<TAB>kb
@@ -203,7 +195,7 @@ body="$WORK/manifest.body"; grep -v '^sum	' "$MANIFEST" >"$body"
 # Every record must be structurally exact before it is trusted: hex name, a
 # dev:inode, and a size. A malformed line means the manifest is not the artifact
 # the dry run produced.
-bad="$(sed -n 's/^candidate\t//p' "$MANIFEST" | grep -cvE '^[0-9a-f]+\t[0-9]+:[0-9]+\t[0-9]+$' || true)"
+bad="$(scratch_manifest_bad_records "$body")"
 [ "${bad:-0}" -eq 0 ] || scratch_die "manifest contains $bad malformed candidate record(s)"
 
 m_rootid="$(sed -n 's/^rootid\t//p' "$MANIFEST" | tail -1)"
@@ -226,13 +218,17 @@ printf '\n=== deleting ===\n'
 # success. Renaming into a staging directory is atomic with respect to the name,
 # so whatever was moved is exactly what is then identified and removed -- and if
 # the moved object is not the approved one, it is put straight back.
-QUAR="$ROOT_REAL/.scratch-sweep-quarantine.$$"   # hidden, so classification skips it
-mkdir -p "$QUAR" || scratch_die "cannot stage removals in $ROOT_REAL"
+# Exclusive by construction. `mkdir -p` succeeds against a pre-existing
+# directory, which meant an unrelated hidden directory could be adopted as
+# staging -- and then recursively deleted by the cleanup below along with
+# contents nobody approved.
+QUAR="$(mktemp -d "$ROOT_REAL/.scratch-sweep-XXXXXX")" || scratch_die "cannot stage removals in $ROOT_REAL"
+case "$QUAR" in "$ROOT_REAL"/.scratch-sweep-*) : ;; *) scratch_die "staging directory landed outside the root";; esac
 removed=0; skipped=0
 
 while IFS="$(printf '\t')" read -r hexname devino kb; do
   [ -n "$hexname" ] || continue
-  name="$(scratch_hex_decode "$hexname")"
+  scratch_hex_decode_exact "$hexname"; name="$SCRATCH_DECODED"
   shown="$(scratch_display_name "$name")"
   target="$ROOT_REAL/$name"
 
@@ -248,15 +244,35 @@ while IFS="$(printf '\t')" read -r hexname devino kb; do
   # The decisive check, after the object can no longer be swapped under us.
   staged_id="$(scratch_devino "$staged" 2>/dev/null)"
   if [ "$staged_id" != "$devino" ]; then
-    mv -- "$staged" "$target" 2>/dev/null
+    mv -- "$staged" "$target" 2>/dev/null || printf '  WARN  %s could not be restored; it is in %s\n' "$shown" "$QUAR" >&2
     printf '  SKIP  %s (identity changed at the deletion boundary)\n' "$shown"; skipped=$((skipped+1)); continue
   fi
 
-  rm -rf -- "$staged" && { printf '  removed %s\n' "$shown"; removed=$((removed+1)); }
+  # Someone may hold a descriptor into the staged tree and still be writing.
+  # Re-check activity now that it is parked, and put it back if it moved.
+  if [ -n "$(find "$staged" -mtime -"$OLDER_THAN" -print -quit 2>/dev/null)" ]; then
+    mv -- "$staged" "$target" 2>/dev/null || printf '  WARN  %s could not be restored; it is in %s\n' "$shown" "$QUAR" >&2
+    printf '  SKIP  %s (written to after staging)\n' "$shown"; skipped=$((skipped+1)); continue
+  fi
+
+  # Every removal is accounted for. A silent failure here previously left the
+  # object to be swept up by a blanket cleanup, reporting "Removed 0 of 1" and
+  # exiting 0 while the object was in fact gone.
+  if rm -rf -- "$staged" 2>/dev/null && [ ! -e "$staged" ]; then
+    printf '  removed %s\n' "$shown"; removed=$((removed+1))
+  else
+    printf '  FAIL  %s could not be removed and is staged in %s\n' "$shown" "$QUAR" >&2
+    skipped=$((skipped+1))
+  fi
 done <"$WORK/approved"
 
-rmdir "$QUAR" 2>/dev/null || rm -rf -- "$QUAR"
-[ "$skipped" -gt 0 ] && printf '\nINCOMPLETE — %s approved entries were skipped and remain on disk.\n' "$skipped"
+# rmdir only: it fails on a non-empty directory rather than destroying whatever
+# is inside. Anything left is reported, never silently swept.
+if ! rmdir "$QUAR" 2>/dev/null; then
+  printf '\nWARNING — staging directory is not empty and was left in place:\n  %s\n' "$QUAR" >&2
+  skipped=$((skipped+1))
+fi
+[ "$skipped" -gt 0 ] && printf '\nINCOMPLETE — %s approved entries were skipped or failed and remain on disk.\n' "$skipped"
 
 printf '\nRemoved %s of %s approved entries.\n' "$removed" "$(wc -l <"$WORK/approved" | tr -d ' ')"
 [ "$skipped" -gt 0 ] && EXIT_CODE=1 || EXIT_CODE=0
