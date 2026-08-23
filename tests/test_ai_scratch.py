@@ -335,7 +335,7 @@ class TestReviewSurfaceIntegrity(ScratchFixture):
         records = [ln for ln in manifest.splitlines() if ln.startswith("candidate\t")]
         self.assertEqual(len(records), 2)
         for record in records:
-            self.assertRegex(record, r"^candidate\t[0-9a-f]+\t[0-9]+:[0-9]+:[0-9]+\t[0-9]+$")
+            self.assertRegex(record, r"^candidate\t[0-9a-f]+\t[0-9]+:[0-9]+:[0-9]+(\.[0-9]+)?\t[0-9]+$")
 
     def test_malformed_manifest_record_is_refused(self):
         (self.root / "old").mkdir()

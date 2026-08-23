@@ -67,11 +67,20 @@ scratch_objid() {  # <path>
 # presented an identical dev:ino and was accepted as the approved object. ctime
 # changes whenever the inode is re-created or its metadata altered, which closes
 # that hole. macOS happened to allocate fresh inodes and hid this entirely --
-# Linux CI is what surfaced it.
+# Linux CI is what surfaced it. Whole-second ctime was still not enough: a
+# reused inode plus a replacement made inside the same second is byte-identical,
+# so the ctime is captured at NANOSECOND resolution on both platforms (GNU
+# exposes it through %z, BSD through %Fc; %Z and %c are seconds only).
+# The ctime field is deliberately kept free of colons: callers split this string
+# with `cut -d: -f1,2` and `${id%:*}` to compare dev:inode alone, and a colon in
+# the last field would silently shift those boundaries.
 scratch_devino() {  # <path>
   local out
-  out="$(stat -c '%d:%i:%Z' -- "$1" 2>/dev/null)" && { printf '%s' "$out"; return 0; }
-  out="$(stat -f '%d:%i:%c' -- "$1" 2>/dev/null)" && { printf '%s' "$out"; return 0; }
+  out="$(stat -c '%d %i %Z %z' -- "$1" 2>/dev/null)" && {
+    printf '%s' "$out" | awk '{n=index($5,"."); print $1":"$2":"$3"."(n?substr($5,n+1):"0")}'
+    return 0
+  }
+  out="$(stat -f '%d:%i:%Fc' -- "$1" 2>/dev/null)" && { printf '%s' "$out"; return 0; }
   return 1
 }
 
@@ -133,7 +142,7 @@ scratch_hex_decode_exact() {  # <hex> -> assigns to SCRATCH_DECODED
 scratch_manifest_bad_records() {  # <file>
   LC_ALL=C awk -F'\t' '
     $1 == "candidate" {
-      if (NF != 4 || $2 !~ /^[0-9a-f]+$/ || $3 !~ /^[0-9]+:[0-9]+:[0-9]+$/ || $4 !~ /^[0-9]+$/) bad++
+      if (NF != 4 || $2 !~ /^[0-9a-f]+$/ || $3 !~ /^[0-9]+:[0-9]+:[0-9]+(\.[0-9]+)?$/ || $4 !~ /^[0-9]+$/) bad++
     }
     END { print bad + 0 }' "$1"
 }
