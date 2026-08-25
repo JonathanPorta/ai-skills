@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sys
 import subprocess
 import tempfile
 import unittest
@@ -436,6 +437,71 @@ class TestStagingIsExclusive(ScratchFixture):
         self.assertTrue((stale / "data").exists(),
                         "cleanup destroyed a pre-existing hidden directory")
         self.assertFalse((self.root / "idle").exists())
+
+    def _apply_while_holding(self, hold: str):
+        """Run apply while a child process holds `hold` open inside a candidate.
+
+        The child is started BEFORE the dry run and held across the whole apply,
+        so no timing window has to be hit: the descriptor is live for the entire
+        removal transition.
+        """
+        cand = self.root / "busy"
+        cand.mkdir()
+        (cand / "work").write_text("original\n")
+        (self.root / "idle").mkdir()
+        backdate(self.root)
+
+        if hold == "fd":
+            code = ("import sys,time\n"
+                    "f=open(sys.argv[1],'a')\n"
+                    "sys.stdout.write('ready\\n');sys.stdout.flush()\n"
+                    "sys.stdin.readline()\n"
+                    "f.write('appended after staging\\n');f.close()\n")
+            arg = str(cand / "work")
+        else:
+            code = ("import sys,os\n"
+                    "os.chdir(sys.argv[1])\n"
+                    "sys.stdout.write('ready\\n');sys.stdout.flush()\n"
+                    "sys.stdin.readline()\n")
+            arg = str(cand)
+
+        child = subprocess.Popen([sys.executable, "-c", code, arg],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 text=True)
+        try:
+            self.assertEqual(child.stdout.readline().strip(), "ready")
+            manifest = self.manifest_from_dry_run()
+            result = self.sweep("--apply", "--manifest", manifest)
+        finally:
+            child.stdin.write("go\n")
+            child.stdin.close()
+            child.wait(timeout=30)
+            child.stdout.close()
+        return cand, result
+
+    def test_a_held_descriptor_prevents_removal_and_its_write_survives(self):
+        cand, result = self._apply_while_holding("fd")
+
+        self.assertTrue(cand.exists(), "a candidate held open was deleted")
+        self.assertIn("appended after staging", (cand / "work").read_text(),
+                      "a write made through a held descriptor was lost")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("INCOMPLETE", result.stdout)
+
+    def test_a_shell_parked_inside_a_candidate_prevents_removal(self):
+        cand, result = self._apply_while_holding("cwd")
+
+        self.assertTrue(cand.exists(),
+                        "a candidate someone was sitting in was deleted")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_an_idle_candidate_is_still_removed_while_another_is_held(self):
+        """The writer scan must not false-positive on unrelated candidates."""
+        cand, _ = self._apply_while_holding("fd")
+
+        self.assertTrue(cand.exists())
+        self.assertFalse((self.root / "idle").exists(),
+                         "an idle candidate was spared by an unrelated holder")
 
     def test_apply_reports_incomplete_and_nonzero_when_an_entry_is_skipped(self):
         (self.root / "one").mkdir()

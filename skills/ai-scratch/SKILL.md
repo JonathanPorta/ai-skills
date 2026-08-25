@@ -101,7 +101,12 @@ scripts/scratch-sweep.sh --apply --manifest FILE   # delete exactly what was app
      file, and repositories nested below the top — has uncommitted changes or
      commits absent from every remote, including on a detached HEAD;
    - git could be interrogated at all. A repository that cannot be read is kept,
-     not assumed safe.
+     not assumed safe;
+   - no process still holds it open. At the moment of deletion the entry has
+     already been renamed aside, so nothing can reach it afresh and the only
+     processes that could still write to it are those holding a descriptor or
+     sitting in it from before — which are enumerated by name. A shell parked
+     in a directory, or an editor with a file open, keeps that entry.
 4. **Wait for an explicit yes.** Never run `--apply` in the same turn as the
    proposal, and never infer approval from an earlier instruction.
 5. Run `--apply --manifest <file>` using the manifest the dry run printed, then

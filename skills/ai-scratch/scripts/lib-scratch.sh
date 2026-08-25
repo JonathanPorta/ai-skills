@@ -84,6 +84,50 @@ scratch_devino() {  # <path>
   return 1
 }
 
+# Once the object has been renamed into quarantine it no longer has a published
+# path, so nothing can open it afresh. The set of processes able to write to it
+# can therefore only SHRINK, and it is exactly the set already holding a
+# descriptor or a working directory inside it from before the rename. That set
+# is enumerable, which is what makes this a closure rather than a best-effort
+# scan -- a lock is not available to us and is not needed.
+#
+# This asks who CAN still write. The mtime rescan that follows asks what HAS
+# been written. Both are required: a writer that closed its descriptor before
+# this scan is invisible here but its writes already landed, so the rescan sees
+# them; a writer still holding a descriptor has written nothing yet, so the
+# rescan is blind to it but this scan is not.
+#
+# Not covered, and deliberately so: a writer that mapped the file and then
+# closed its descriptor leaves nothing to enumerate, and a process that goes
+# looking for the quarantine directory by reading the root can defeat any
+# scheme short of a lock. Neither is the in-flight editor or parked shell this
+# is meant to protect.
+#
+# Descriptors belonging to another user's processes are not readable on Linux
+# and are not reported. The scratch root is a single-user workspace, so this
+# scan is authoritative there.
+scratch_live_writers() {  # <dir>; 0 none, 1 writers present, 2 cannot determine
+  local dir="$1" link p f
+  if [ -d /proc/self/fd ]; then
+    for p in /proc/[0-9]*; do
+      [ "${p##*/}" = "$$" ] && continue
+      for f in "$p"/fd/* "$p"/cwd; do
+        link="$(readlink "$f" 2>/dev/null)" || continue
+        [ "$link" = "$dir" ] && return 1
+        case "$link" in "$dir"/*) return 1;; esac
+      done
+    done
+    return 0
+  fi
+  if command -v lsof >/dev/null 2>&1; then
+    # lsof exits 1 when it simply finds nothing open, so this keys on whether
+    # it printed a pid, never on its exit status.
+    [ -n "$(lsof -t +D "$dir" 2>/dev/null)" ] && return 1
+    return 0
+  fi
+  return 2
+}
+
 # Hex, not base64: encoding flags differ across platforms, hex does not. Used so
 # candidate names with newlines, tabs, or globs survive a manifest round trip.
 scratch_hex_encode() { printf '%s' "$1" | od -An -v -tx1 | tr -d ' \n'; }

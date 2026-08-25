@@ -254,8 +254,21 @@ while IFS="$(printf '\t')" read -r hexname devino kb; do
     printf '  SKIP  %s (identity changed at the deletion boundary)\n' "$shown"; skipped=$((skipped+1)); continue
   fi
 
-  # Someone may hold a descriptor into the staged tree and still be writing.
-  # Re-check activity now that it is parked, and put it back if it moved.
+  # Capability before activity: ask who can still write BEFORE asking what has
+  # been written. Reversing these two leaves a hole -- a writer could append
+  # after the activity scan and close before this one, and be missed by both.
+  lw=0; scratch_live_writers "$staged" || lw=$?
+  if [ "$lw" -ne 0 ]; then
+    mv -- "$staged" "$target" 2>/dev/null || printf '  WARN  %s could not be restored; it is in %s\n' "$shown" "$QUAR" >&2
+    if [ "$lw" -eq 1 ]; then
+      printf '  SKIP  %s (a process still holds it open)\n' "$shown"
+    else
+      printf '  SKIP  %s (open descriptors cannot be enumerated on this system)\n' "$shown"
+    fi
+    skipped=$((skipped+1)); continue
+  fi
+
+  # Now that no one can still be writing, confirm no one already did.
   if [ -n "$(find "$staged" -mtime -"$OLDER_THAN" -print -quit 2>/dev/null)" ]; then
     mv -- "$staged" "$target" 2>/dev/null || printf '  WARN  %s could not be restored; it is in %s\n' "$shown" "$QUAR" >&2
     printf '  SKIP  %s (written to after staging)\n' "$shown"; skipped=$((skipped+1)); continue
