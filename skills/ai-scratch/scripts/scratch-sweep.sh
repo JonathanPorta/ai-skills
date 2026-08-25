@@ -17,6 +17,16 @@ SELF_DIR="$(CDPATH= cd -P -- "$(dirname -- "$0")" && pwd -P)"
 # shellcheck source=lib-scratch.sh
 . "$SELF_DIR/lib-scratch.sh"
 
+# `git status` is not a read-only operation: it refreshes the index stat cache
+# and writes it back, which updates the mtime of .git and .git/index. Those live
+# INSIDE the entry being examined, so inspecting a repository marked it as
+# modified, and the next run classified it as active work rather than
+# reclaimable. One dry run over a real workspace re-dated 1217 of 1551
+# repositories and cut the reclaimable set from 816 entries to 99 -- the tool
+# disabled itself by looking. This is what GIT_OPTIONAL_LOCKS exists for; it is
+# exported once here so it also covers any call site added later.
+export GIT_OPTIONAL_LOCKS=0
+
 EXPLICIT_ROOT=""; OLDER_THAN=""; APPLY=0; VERBOSE=0; MANIFEST=""; OUT_MANIFEST=""
 
 while [ $# -gt 0 ]; do

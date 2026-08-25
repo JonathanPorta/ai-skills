@@ -519,5 +519,70 @@ class TestStagingIsExclusive(ScratchFixture):
         self.assertTrue((self.root / "two").exists())
 
 
+class TestReportingDoesNotDisturbWhatItReports(ScratchFixture):
+    """A dry run reports on the workspace. It must not become part of it.
+
+    `git status` refreshes the index stat cache and writes it back, so merely
+    inspecting a repository re-dates .git and .git/index. Those are inside the
+    entry, so the entry then looks like active work and the next run keeps it.
+    On a real workspace one dry run re-dated 1217 of 1551 repositories and took
+    the reclaimable set from 816 entries to 99.
+    """
+
+    def _snapshot(self) -> dict:
+        snap = {}
+        for path in [self.root, *self.root.rglob("*")]:
+            try:
+                snap[str(path)] = path.lstat().st_mtime_ns
+            except OSError:
+                pass
+        return snap
+
+    def _reclaimable(self, stdout: str) -> set:
+        return {ln.split()[1] for ln in stdout.splitlines()
+                if ln.startswith("  FREE  ")}
+
+    def _pushed_repo(self, name: str):
+        """A repo that is clean and fully pushed, so it IS reclaimable."""
+        remote = self.tmp / f"{name}.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+        repo = self.root / name
+        new_repo(repo)
+        git(repo, "remote", "add", "origin", str(remote))
+        git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
+        git(repo, "fetch", "-q", "origin")
+        return repo
+
+    def test_a_dry_run_leaves_every_mtime_alone(self):
+        self._pushed_repo("pushed")
+        dirty = self.root / "dirty"
+        new_repo(dirty)
+        (dirty / "f").write_text("uncommitted\n")
+        backdate(self.root)
+
+        before = self._snapshot()
+        self.sweep()
+        after = self._snapshot()
+
+        changed = sorted(k for k, v in before.items() if after.get(k) != v)
+        self.assertEqual(changed, [], f"a dry run modified {len(changed)} path(s): {changed[:4]}")
+
+    def test_two_dry_runs_in_a_row_agree(self):
+        """The property an operator actually depends on: the proposal is stable
+        long enough to read it and approve it."""
+        self._pushed_repo("pushed")
+        (self.root / "plain").mkdir()
+        backdate(self.root)
+
+        first = self._reclaimable(self.sweep().stdout)
+        self.assertIn("pushed", first,
+                      "precondition: a clean pushed repo should be reclaimable")
+
+        second = self._reclaimable(self.sweep().stdout)
+        self.assertEqual(first, second,
+                         "the second dry run disagreed with the first, so the "
+                         "manifest from the first could never be applied")
+
+
 if __name__ == "__main__":
     unittest.main()
