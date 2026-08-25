@@ -1,0 +1,46 @@
+{
+  "$schema": "https://open-design.ai/schemas/plugin.v1.json",
+  "specVersion": "1.0.0",
+  "name": "ai-scratch",
+  "title": "AI Scratch",
+  "version": "0.1.0",
+  "description": "Use the designated AI scratch directory for review clones and generated artifacts, and reclaim its disk space through a guarded, confirm-first cleanup.",
+  "author": {
+    "name": "Jonathan Porta",
+    "url": "https://github.com/JonathanPorta"
+  },
+  "homepage": "https://github.com/JonathanPorta/ai-skills/tree/main/skills/ai-scratch",
+  "tags": [
+    "scratch",
+    "cleanup",
+    "disk",
+    "workspace"
+  ],
+  "compat": {
+    "agentSkills": [
+      {
+        "path": "./SKILL.md"
+      }
+    ]
+  },
+  "od": {
+    "kind": "skill",
+    "taskKind": "tune-collab",
+    "mode": "export",
+    "platform": "desktop",
+    "scenario": "scratch-workspace",
+    "useCase": {
+      "query": "Use the designated scratch directory for work that does not belong to a project checkout, and reclaim disk space from it without touching live queue state or unpushed work."
+    },
+    "context": {
+      "skills": [
+        {
+          "path": "./SKILL.md"
+        }
+      ]
+    },
+    "capabilities": [
+      "prompt:inject"
+    ]
+  }
+}
