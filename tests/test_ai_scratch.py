@@ -633,6 +633,27 @@ class TestGitMetadataIsNotUserActivity(ScratchFixture):
         # It is kept for having unpushed work, never for the .git file's date.
         self.assertNotIn("active within", self._kept_reason("linked"))
 
+    def test_what_the_dry_run_approves_is_what_apply_removes(self):
+        """The classifier and the post-stage recheck must agree about idleness.
+
+        They were separate copies of the same find. When only the classifier
+        learned to ignore git metadata, apply refused 767 of the 949 entries it
+        had itself just approved, reporting every one as written to after
+        staging. Classification alone is not evidence the entry is removable.
+        """
+        repo = self._pushed_repo("housekeeping")
+        backdate(self.root)
+        for p in (repo / ".git", repo / ".git" / "index"):
+            os.utime(p, None)
+
+        manifest = self.manifest_from_dry_run()
+        result = self.sweep("--apply", "--manifest", manifest)
+
+        self.assertNotIn("written to after staging", result.stdout,
+                         "the post-stage recheck disagreed with the classifier")
+        self.assertFalse(repo.exists(), "apply refused what the dry run approved")
+        self.assertEqual(result.returncode, 0, result.stdout)
+
     def test_a_recent_working_tree_edit_still_pins_the_entry(self):
         repo = self._pushed_repo("edited")
         backdate(self.root)

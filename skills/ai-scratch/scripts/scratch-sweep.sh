@@ -92,7 +92,7 @@ classify() {  # <abs-path> <base-name>
   # seven days while only about 100 were reported reclaimable. .git is matched
   # as a name so this prunes the directory in a clone and the file in a linked
   # worktree alike.
-  if [ -n "$(find "$path" -name .git -prune -o -mtime -"$OLDER_THAN" -print -quit 2>/dev/null)" ]; then
+  if scratch_recently_active "$path" "$OLDER_THAN"; then
     printf 'active within %sd' "$OLDER_THAN"; return 0
   fi
 
@@ -289,7 +289,7 @@ while IFS="$(printf '\t')" read -r hexname devino kb; do
   fi
 
   # Now that no one can still be writing, confirm no one already did.
-  if [ -n "$(find "$staged" -mtime -"$OLDER_THAN" -print -quit 2>/dev/null)" ]; then
+  if scratch_recently_active "$staged" "$OLDER_THAN"; then
     mv -- "$staged" "$target" 2>/dev/null || printf '  WARN  %s could not be restored; it is in %s\n' "$shown" "$QUAR" >&2
     printf '  SKIP  %s (written to after staging)\n' "$shown"; skipped=$((skipped+1)); continue
   fi

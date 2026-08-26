@@ -128,6 +128,21 @@ scratch_live_writers() {  # <dir>; 0 none, 1 writers present, 2 cannot determine
   return 2
 }
 
+# The idle test, defined once. It previously existed in two places -- the
+# classifier and the post-stage recheck -- and changing only the classifier left
+# apply refusing to remove 767 of the 949 entries it had itself just approved,
+# because the two copies disagreed about whether git metadata counted as
+# activity. Callers must call this rather than inline a find.
+#
+# Git's own metadata is not activity: a fetch or an index refresh re-dates .git
+# without anyone having done work, and a commit that exists only locally is
+# caught by the unpushed check, which is exact where a timestamp is not. .git is
+# matched by name so this prunes the directory in a clone and the file in a
+# linked worktree alike.
+scratch_recently_active() {  # <path> <days>; 0 = active, 1 = idle
+  [ -n "$(find "$1" -name .git -prune -o -mtime -"$2" -print -quit 2>/dev/null)" ]
+}
+
 # Hex, not base64: encoding flags differ across platforms, hex does not. Used so
 # candidate names with newlines, tabs, or globs survive a manifest round trip.
 scratch_hex_encode() { printf '%s' "$1" | od -An -v -tx1 | tr -d ' \n'; }
