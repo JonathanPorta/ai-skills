@@ -134,13 +134,28 @@ scratch_live_writers() {  # <dir>; 0 none, 1 writers present, 2 cannot determine
 # because the two copies disagreed about whether git metadata counted as
 # activity. Callers must call this rather than inline a find.
 #
-# Git's own metadata is not activity: a fetch or an index refresh re-dates .git
-# without anyone having done work, and a commit that exists only locally is
-# caught by the unpushed check, which is exact where a timestamp is not. .git is
-# matched by name so this prunes the directory in a clone and the file in a
-# linked worktree alike.
+# Two specific caches are ignored, NOT the whole of .git. Pruning the entire
+# directory was wrong: plenty of what lives under .git is user-authored and
+# exists nowhere else, and neither `git status` nor `rev-list --not --remotes`
+# can see it. A hand-written .git/hooks/pre-commit is invisible to both. So is a
+# commit that has been reset away from every ref and survives only in the
+# reflog under .git/logs. Excluding all of .git made each of those look idle and
+# deleted it.
+#
+# What IS ignored is the mtime of the .git entry itself, and the index. The
+# entry's own mtime moves for any write anywhere beneath it and so carries no
+# information of its own; the index is a cache of the working tree, rebuilt by
+# `git reset`, and anything staged in it is reported by the uncommitted check
+# instead. Those two are exactly what a status refresh re-dates, which is what
+# made 1217 repositories look busy after a single sweep.
+#
+# The index is matched under any .git so submodules, whose index lives at
+# .git/modules/<name>/index, are covered too.
 scratch_recently_active() {  # <path> <days>; 0 = active, 1 = idle
-  [ -n "$(find "$1" -name .git -prune -o -mtime -"$2" -print -quit 2>/dev/null)" ]
+  [ -n "$(find "$1" -mtime -"$2" \
+            ! -name .git \
+            ! \( -name index -path '*/.git/*' \) \
+            -print -quit 2>/dev/null)" ]
 }
 
 # Hex, not base64: encoding flags differ across platforms, hex does not. Used so

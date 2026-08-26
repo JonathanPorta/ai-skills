@@ -587,10 +587,10 @@ class TestReportingDoesNotDisturbWhatItReports(ScratchFixture):
 class TestGitMetadataIsNotUserActivity(ScratchFixture):
     """Repository housekeeping must not read as someone doing work.
 
-    A fetch, a gc, or an index refresh re-dates .git while nothing of value was
-    created. Anything that IS valuable -- a commit not on a remote, an edit not
-    committed -- is caught by its own guard, precisely, and those guards are not
-    relaxed here.
+    An index refresh re-dates .git while nothing of value was created. But most
+    of what lives under .git IS worth keeping and is invisible to the other
+    guards, so only two caches are ignored: the .git entry's own mtime and the
+    index. A hand-written hook and a reflog-only commit must survive.
     """
 
     def _pushed_repo(self, name: str):
@@ -654,6 +654,57 @@ class TestGitMetadataIsNotUserActivity(ScratchFixture):
         self.assertFalse(repo.exists(), "apply refused what the dry run approved")
         self.assertEqual(result.returncode, 0, result.stdout)
 
+    def test_a_local_hook_is_not_disposable(self):
+        """A hook is user-authored, lives only in this clone, and neither
+        `git status` nor `rev-list --not --remotes` can see it."""
+        repo = self._pushed_repo("hooked")
+        (self.root / "decoy").mkdir()   # so the dry run has something to offer
+        backdate(self.root)
+        hook = repo / ".git" / "hooks" / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 0\n")
+
+        manifest = self.manifest_from_dry_run()
+        self.sweep("--apply", "--manifest", manifest)
+        self.assertFalse((self.root / "decoy").exists(), "the decoy proves apply ran")
+        self.assertTrue(hook.exists(), "a hand-written git hook was deleted")
+
+    def test_a_commit_recoverable_only_through_the_reflog_is_not_disposable(self):
+        """Reset away from every ref, so `rev-list --all --not --remotes` cannot
+        see it. It survives only in .git/logs, and it is still recoverable."""
+        repo = self._pushed_repo("reflog-only")
+        git(repo, "commit", "-q", "--allow-empty", "-m", "reachable from nothing")
+        git(repo, "reset", "-q", "--hard", "HEAD~1")
+        (self.root / "decoy").mkdir()   # so the dry run has something to offer
+        backdate(self.root)
+        os.utime(repo / ".git" / "logs" / "HEAD", None)
+
+        manifest = self.manifest_from_dry_run()
+        self.sweep("--apply", "--manifest", manifest)
+        self.assertFalse((self.root / "decoy").exists(), "the decoy proves apply ran")
+        self.assertTrue(repo.exists(),
+                        "a commit recoverable only through the reflog was deleted")
+
+    def test_git_local_state_created_after_approval_is_not_deleted(self):
+        """Git-local state created after approval must survive.
+
+        The guard that fires here is the manifest, not the idle rule: each entry
+        is recorded with its size, so a hook written after approval changes it
+        and apply refuses the whole set rather than deleting something other
+        than what was reviewed. Worth pinning precisely because it holds even
+        when the idle rule is wrong -- it is the backstop, not the argument.
+        """
+        repo = self._pushed_repo("late-hook")
+        backdate(self.root)
+        manifest = self.manifest_from_dry_run()
+
+        hook = repo / ".git" / "hooks" / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 0\n")
+
+        result = self.sweep("--apply", "--manifest", manifest)
+        self.assertTrue(hook.exists(),
+                        "state created after approval was deleted anyway")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
     def test_a_recent_working_tree_edit_still_pins_the_entry(self):
         repo = self._pushed_repo("edited")
         backdate(self.root)
@@ -666,8 +717,8 @@ class TestGitMetadataIsNotUserActivity(ScratchFixture):
         """The safety-critical case: committing writes ONLY to .git, which this
         change stops treating as activity. The unpushed guard must still hold."""
         repo = self._pushed_repo("committed")
-        backdate(self.root)
         git(repo, "commit", "-q", "--allow-empty", "-m", "exists only here")
+        backdate(self.root)   # old, so only the unpushed guard can save it
 
         self.assertNotIn("committed", self._reclaimable(),
                          "a commit that exists nowhere else became reclaimable")
