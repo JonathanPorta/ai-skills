@@ -705,6 +705,40 @@ class TestGitMetadataIsNotUserActivity(ScratchFixture):
                         "state created after approval was deleted anyway")
         self.assertNotEqual(result.returncode, 0, result.stdout)
 
+    def test_an_index_write_during_the_removal_transition_is_not_lost(self):
+        """The index is exempt from the AGE test, and must not be exempt from
+        the CHANGE test.
+
+        A writer that mutates the index after the final classification and then
+        closes leaves nothing for the other guards to find: no descriptor to
+        enumerate, and no recent file the idle rule is willing to look at. The
+        writer here runs for the whole apply, so the mutation is guaranteed to
+        land inside the removal window rather than depending on a race being
+        won.
+        """
+        repo = self._pushed_repo("staged-write")
+        backdate(self.root)
+        manifest = self.manifest_from_dry_run()
+
+        # The writer follows the entry INTO staging rather than touching the
+        # path it was moved off, which is what made an earlier version of this
+        # test pass only when it happened to win a race before the rename.
+        stop = self.tmp / "stop"
+        writer = subprocess.Popen(
+            ["sh", "-c",
+             f'while [ ! -f "{stop}" ]; do '
+             f'for i in "{self.root}"/.scratch-sweep-*/*/.git/index; do '
+             f'[ -f "$i" ] && touch "$i"; done; done'])
+        try:
+            result = self.sweep("--apply", "--manifest", manifest)
+        finally:
+            stop.write_text("")
+            writer.wait(timeout=30)
+
+        self.assertTrue(repo.exists(),
+                        "an index mutation during the removal window was deleted")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
     def test_a_recent_working_tree_edit_still_pins_the_entry(self):
         repo = self._pushed_repo("edited")
         backdate(self.root)

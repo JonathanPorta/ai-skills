@@ -263,6 +263,11 @@ while IFS="$(printf '\t')" read -r hexname devino kb; do
   [ -z "$late" ] || { printf '  SKIP  %s (%s)\n' "$shown" "$late"; skipped=$((skipped+1)); continue; }
 
   staged="$QUAR/$hexname"
+  # Opens the removal window. Everything from here to the rm is compared against
+  # this mark, so any write landing in between is visible regardless of what it
+  # touched or whether the writer is still around to be seen.
+  touch "$WORK/window" 2>/dev/null
+
   mv -- "$target" "$staged" 2>/dev/null || { printf '  SKIP  %s (could not stage)\n' "$shown"; skipped=$((skipped+1)); continue; }
 
   # The decisive check, after the object can no longer be swapped under us.
@@ -292,6 +297,24 @@ while IFS="$(printf '\t')" read -r hexname devino kb; do
   if scratch_recently_active "$staged" "$OLDER_THAN"; then
     mv -- "$staged" "$target" 2>/dev/null || printf '  WARN  %s could not be restored; it is in %s\n' "$shown" "$QUAR" >&2
     printf '  SKIP  %s (written to after staging)\n' "$shown"; skipped=$((skipped+1)); continue
+  fi
+
+  # The last gate, and the only one that exempts nothing at all.
+  #
+  # The idle rule above asks how OLD things are, and deliberately ignores the
+  # git index, because a stale index timestamp is not evidence of work. That
+  # exemption is right for age and wrong for change: a writer that mutated the
+  # index after the final classification and then closed left no descriptor to
+  # enumerate, no recent file the idle rule would look at, and a valid staged
+  # change that apply then deleted.
+  #
+  # Asking a different question closes it. Not "is anything in here recent"
+  # but "did anything in here change since we committed to removing it" --
+  # which needs no exemptions, because during this window nothing has any
+  # business changing at all, index included.
+  if [ -n "$(find "$staged" -newer "$WORK/window" -print -quit 2>/dev/null)" ]; then
+    mv -- "$staged" "$target" 2>/dev/null || printf '  WARN  %s could not be restored; it is in %s\n' "$shown" "$QUAR" >&2
+    printf '  SKIP  %s (changed during the removal transition)\n' "$shown"; skipped=$((skipped+1)); continue
   fi
 
   # Every removal is accounted for. A silent failure here previously left the
