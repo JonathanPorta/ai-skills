@@ -96,7 +96,10 @@ scripts/scratch-sweep.sh --apply --manifest FILE   # delete exactly what was app
    - it is not a hidden entry, so no other tool's queue, cache, lock, or claim
      state is touched;
    - nothing anywhere inside it has been modified within the idle window, so a
-     session actively editing a file deep in a tree still counts as busy;
+     session actively editing a file deep in a tree still counts as busy. Git's
+     own metadata is excluded: a fetch or an index refresh re-dates `.git`
+     without anyone having done work, and a commit that exists only locally is
+     caught by the unpushed check below rather than by its timestamp;
    - no repository inside it — including linked worktrees, whose `.git` is a
      file, and repositories nested below the top — has uncommitted changes or
      commits absent from every remote, including on a detached HEAD;

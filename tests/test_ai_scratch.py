@@ -584,5 +584,74 @@ class TestReportingDoesNotDisturbWhatItReports(ScratchFixture):
                          "manifest from the first could never be applied")
 
 
+class TestGitMetadataIsNotUserActivity(ScratchFixture):
+    """Repository housekeeping must not read as someone doing work.
+
+    A fetch, a gc, or an index refresh re-dates .git while nothing of value was
+    created. Anything that IS valuable -- a commit not on a remote, an edit not
+    committed -- is caught by its own guard, precisely, and those guards are not
+    relaxed here.
+    """
+
+    def _pushed_repo(self, name: str):
+        remote = self.tmp / f"{name}.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+        repo = self.root / name
+        new_repo(repo)
+        git(repo, "remote", "add", "origin", str(remote))
+        git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
+        git(repo, "fetch", "-q", "origin")
+        return repo
+
+    def _reclaimable(self) -> set:
+        return {ln.split()[1] for ln in self.sweep().stdout.splitlines()
+                if ln.startswith("  FREE  ")}
+
+    def _kept_reason(self, name: str) -> str:
+        for ln in self.sweep("--verbose").stdout.splitlines():
+            if ln.startswith("  KEEP  ") and ln.split()[1] == name:
+                return ln.split("  ")[-1].strip()
+        return ""
+
+    def test_a_touched_git_directory_does_not_pin_a_clean_repo(self):
+        repo = self._pushed_repo("housekeeping")
+        backdate(self.root)
+        # Exactly what `git fetch` or an index refresh leaves behind.
+        for p in (repo / ".git", repo / ".git" / "index"):
+            os.utime(p, None)
+
+        self.assertIn("housekeeping", self._reclaimable(),
+                      "git metadata alone pinned an otherwise idle clean repo")
+
+    def test_a_touched_git_file_does_not_pin_a_linked_worktree(self):
+        parent = self.tmp / "parent"
+        new_repo(parent)
+        git(parent, "worktree", "add", "-q", str(self.root / "linked"), "-b", "wtb")
+        backdate(self.root)
+        os.utime(self.root / "linked" / ".git", None)
+
+        # It is kept for having unpushed work, never for the .git file's date.
+        self.assertNotIn("active within", self._kept_reason("linked"))
+
+    def test_a_recent_working_tree_edit_still_pins_the_entry(self):
+        repo = self._pushed_repo("edited")
+        backdate(self.root)
+        (repo / "f").write_text("someone is working here\n")
+
+        self.assertNotIn("edited", self._reclaimable(),
+                         "a real edit no longer counts as activity")
+
+    def test_a_commit_that_is_not_on_a_remote_is_still_kept(self):
+        """The safety-critical case: committing writes ONLY to .git, which this
+        change stops treating as activity. The unpushed guard must still hold."""
+        repo = self._pushed_repo("committed")
+        backdate(self.root)
+        git(repo, "commit", "-q", "--allow-empty", "-m", "exists only here")
+
+        self.assertNotIn("committed", self._reclaimable(),
+                         "a commit that exists nowhere else became reclaimable")
+        self.assertIn("unpushed", self._kept_reason("committed"))
+
+
 if __name__ == "__main__":
     unittest.main()

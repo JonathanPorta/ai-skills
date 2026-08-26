@@ -82,7 +82,17 @@ classify() {  # <abs-path> <base-name>
   # Activity anywhere inside, not just the directory inode. Editing a file in
   # place leaves the parent directory's mtime untouched, so -maxdepth 0 would
   # call an actively edited tree idle.
-  if [ -n "$(find "$path" -mtime -"$OLDER_THAN" -print -quit 2>/dev/null)" ]; then
+  #
+  # Git's own metadata is not activity. A fetch, a gc, or an index refresh
+  # re-dates .git without anyone having done work, and a local commit re-dates
+  # it while the thing actually worth protecting -- the commit -- is caught
+  # precisely by the unpushed and uncommitted checks below. Counting it meant
+  # routine repository housekeeping pinned an entry for a whole idle window:
+  # on a real workspace 1364 of 1477 entries had seen no non-git change in
+  # seven days while only about 100 were reported reclaimable. .git is matched
+  # as a name so this prunes the directory in a clone and the file in a linked
+  # worktree alike.
+  if [ -n "$(find "$path" -name .git -prune -o -mtime -"$OLDER_THAN" -print -quit 2>/dev/null)" ]; then
     printf 'active within %sd' "$OLDER_THAN"; return 0
   fi
 
