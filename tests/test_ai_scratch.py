@@ -739,6 +739,45 @@ class TestGitMetadataIsNotUserActivity(ScratchFixture):
                         "an index mutation during the removal window was deleted")
         self.assertNotEqual(result.returncode, 0, result.stdout)
 
+    def _apply_with_writer(self, shell_body: str, name: str):
+        """Run apply while a writer mutates the entry inside staging.
+
+        The writer follows the entry into the quarantine directory rather than
+        touching the path it was moved off, and runs for the whole apply, so the
+        mutation lands inside the removal window by construction.
+        """
+        repo = self._pushed_repo(name)
+        (repo / "script.sh").write_text("#!/bin/sh\necho hi\n")
+        (repo / "script.sh").chmod(0o644)
+        git(repo, "add", "script.sh")
+        git(repo, "commit", "-qm", "add script")
+        git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
+        git(repo, "fetch", "-q", "origin")
+        backdate(self.root)
+        manifest = self.manifest_from_dry_run()
+
+        stop = self.tmp / "stop"
+        writer = subprocess.Popen(
+            ["sh", "-c",
+             f'while [ ! -f "{stop}" ]; do '
+             f'for d in "{self.root}"/.scratch-sweep-*/*; do {shell_body}; done; done'])
+        try:
+            result = self.sweep("--apply", "--manifest", manifest)
+        finally:
+            stop.write_text("")
+            writer.wait(timeout=30)
+        return repo, result
+
+    def test_a_post_staging_mode_change_is_not_lost(self):
+        """chmod moves mode and ctime but NOT mtime, so an mtime comparison
+        called a permission change no change at all and deleted it."""
+        repo, result = self._apply_with_writer(
+            '[ -f "$d/script.sh" ] && chmod +x "$d/script.sh" 2>/dev/null', "moded")
+
+        self.assertTrue(repo.exists(),
+                        "a permission change during the removal window was deleted")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
     def test_a_recent_working_tree_edit_still_pins_the_entry(self):
         repo = self._pushed_repo("edited")
         backdate(self.root)

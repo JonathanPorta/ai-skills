@@ -218,6 +218,12 @@ body="$WORK/manifest.body"; grep -v '^sum	' "$MANIFEST" >"$body"
 bad="$(scratch_manifest_bad_records "$body")"
 [ "${bad:-0}" -eq 0 ] || scratch_die "manifest contains $bad malformed candidate record(s)"
 
+# The removal boundary compares ctimes, so a find that cannot do it must stop the
+# run rather than silently fall back to a weaker check. GNU findutils and BSD
+# find both support -newerXY; BusyBox does not.
+find "$WORK" -maxdepth 0 -newercm "$WORK" >/dev/null 2>&1 \
+  || scratch_die "this system's find does not support -newercm, which the removal boundary requires"
+
 m_rootid="$(sed -n 's/^rootid\t//p' "$MANIFEST" | tail -1)"
 # dev:inode only: the root's ctime moves whenever anything is created or removed
 # inside it, which is exactly what a sweep does.
@@ -274,6 +280,19 @@ while IFS="$(printf '\t')" read -r hexname devino kb; do
   # Compare dev:inode only here: renaming an object legitimately updates its
   # ctime, so the full triple would mismatch on every successful stage.
   staged_id="$(scratch_devino "$staged" 2>/dev/null)"
+  # A second mark, taken after the identity above is recorded. The first mark
+  # cannot speak for the staged directory itself because our own rename moved
+  # its ctime; this one is placed after that rename, so the directory can be
+  # compared against it like anything else.
+  #
+  # Narrower than the child scan, and honestly so: a change to the entry's own
+  # directory is only seen if it lands after this point, whereas a change to
+  # anything INSIDE it is seen from before the rename onward. There is no
+  # end-to-end test for this line, because a control for it would have to win a
+  # race rather than assert a fact -- one written against it passed or failed
+  # depending on how long the surrounding code took to run. The child scan below
+  # is the load-bearing check; this narrows an edge it cannot reach.
+  touch "$WORK/window-root" 2>/dev/null
   if [ "${staged_id%:*}" != "${devino%:*}" ]; then
     mv -- "$staged" "$target" 2>/dev/null || printf '  WARN  %s could not be restored; it is in %s\n' "$shown" "$QUAR" >&2
     printf '  SKIP  %s (identity changed at the deletion boundary)\n' "$shown"; skipped=$((skipped+1)); continue
@@ -312,7 +331,19 @@ while IFS="$(printf '\t')" read -r hexname devino kb; do
   # but "did anything in here change since we committed to removing it" --
   # which needs no exemptions, because during this window nothing has any
   # business changing at all, index included.
-  if [ -n "$(find "$staged" -newer "$WORK/window" -print -quit 2>/dev/null)" ]; then
+  # ctime, not mtime. `chmod +x` changes an inode's mode and its ctime while
+  # leaving mtime untouched, so an mtime comparison called a permission change
+  # no change at all and deleted it. Every inode mutation moves ctime -- content,
+  # mode, owner -- so comparing it catches the whole class rather than the one
+  # case that prompted this.
+  #
+  # The staged directory ITSELF is excluded from that scan and checked
+  # separately, because our own rename moved its ctime; comparing it to the mark
+  # would reject every entry. Its full identity was captured immediately after
+  # the rename, so comparing against that instead still catches a change to the
+  # directory itself while ignoring the move we performed.
+  if [ -n "$(find "$staged" -mindepth 1 -newercm "$WORK/window" -print -quit 2>/dev/null)" ] ||
+     [ -n "$(find "$staged" -maxdepth 0 -newercm "$WORK/window-root" -print -quit 2>/dev/null)" ]; then
     mv -- "$staged" "$target" 2>/dev/null || printf '  WARN  %s could not be restored; it is in %s\n' "$shown" "$QUAR" >&2
     printf '  SKIP  %s (changed during the removal transition)\n' "$shown"; skipped=$((skipped+1)); continue
   fi
