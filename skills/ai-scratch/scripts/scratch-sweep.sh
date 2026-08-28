@@ -272,7 +272,10 @@ while IFS="$(printf '\t')" read -r hexname devino kb; do
   # Opens the removal window. Everything from here to the rm is compared against
   # this mark, so any write landing in between is visible regardless of what it
   # touched or whether the writer is still around to be seen.
-  touch "$WORK/window" 2>/dev/null
+  touch "$WORK/window" 2>/dev/null || {
+    printf '  SKIP  %s (could not mark the removal window)\n' "$shown"
+    skipped=$((skipped+1)); continue
+  }
 
   mv -- "$target" "$staged" 2>/dev/null || { printf '  SKIP  %s (could not stage)\n' "$shown"; skipped=$((skipped+1)); continue; }
 
@@ -292,7 +295,11 @@ while IFS="$(printf '\t')" read -r hexname devino kb; do
   # race rather than assert a fact -- one written against it passed or failed
   # depending on how long the surrounding code took to run. The child scan below
   # is the load-bearing check; this narrows an edge it cannot reach.
-  touch "$WORK/window-root" 2>/dev/null
+  if ! touch "$WORK/window-root" 2>/dev/null; then
+    mv -- "$staged" "$target" 2>/dev/null || printf '  WARN  %s could not be restored; it is in %s\n' "$shown" "$QUAR" >&2
+    printf '  SKIP  %s (could not mark the removal window)\n' "$shown"
+    skipped=$((skipped+1)); continue
+  fi
   if [ "${staged_id%:*}" != "${devino%:*}" ]; then
     mv -- "$staged" "$target" 2>/dev/null || printf '  WARN  %s could not be restored; it is in %s\n' "$shown" "$QUAR" >&2
     printf '  SKIP  %s (identity changed at the deletion boundary)\n' "$shown"; skipped=$((skipped+1)); continue
@@ -342,10 +349,16 @@ while IFS="$(printf '\t')" read -r hexname devino kb; do
   # would reject every entry. Its full identity was captured immediately after
   # the rename, so comparing against that instead still catches a change to the
   # directory itself while ignoring the move we performed.
-  if [ -n "$(find "$staged" -mindepth 1 -newercm "$WORK/window" -print -quit 2>/dev/null)" ] ||
-     [ -n "$(find "$staged" -maxdepth 0 -newercm "$WORK/window-root" -print -quit 2>/dev/null)" ]; then
+  scratch_change_since "$staged" "$WORK/window" -mindepth 1; c_child=$?
+  scratch_change_since "$staged" "$WORK/window-root" -maxdepth 0; c_root=$?
+  if [ "$c_child" -ne 0 ] || [ "$c_root" -ne 0 ]; then
     mv -- "$staged" "$target" 2>/dev/null || printf '  WARN  %s could not be restored; it is in %s\n' "$shown" "$QUAR" >&2
-    printf '  SKIP  %s (changed during the removal transition)\n' "$shown"; skipped=$((skipped+1)); continue
+    if [ "$c_child" -eq 2 ] || [ "$c_root" -eq 2 ]; then
+      printf '  SKIP  %s (could not verify it was unchanged)\n' "$shown"
+    else
+      printf '  SKIP  %s (changed during the removal transition)\n' "$shown"
+    fi
+    skipped=$((skipped+1)); continue
   fi
 
   # Every removal is accounted for. A silent failure here previously left the

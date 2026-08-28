@@ -158,6 +158,25 @@ scratch_recently_active() {  # <path> <days>; 0 = active, 1 = idle
             -print -quit 2>/dev/null)" ]
 }
 
+# Did anything under <path> change since <mark>? Returns 0 unchanged, 1 changed,
+# 2 COULD NOT TELL -- and the third is the point.
+#
+# find exits nonzero when its reference file is missing or a subtree cannot be
+# read. The previous version discarded both stderr and the exit status and
+# tested only stdout, so a comparison that failed to RUN produced no output and
+# was read as "nothing changed", which authorized a recursive delete. An I/O or
+# permission failure at the last safety gate must never be indistinguishable
+# from a clean result: empty output can mean unchanged, but a nonzero exit
+# cannot.
+scratch_change_since() {  # <path> <mark> [find args...]
+  local path="$1" mark="$2"; shift 2
+  local out rc
+  out="$(find "$path" "$@" -newercm "$mark" -print -quit 2>/dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] || return 2
+  [ -z "$out" ] || return 1
+  return 0
+}
+
 # Hex, not base64: encoding flags differ across platforms, hex does not. Used so
 # candidate names with newlines, tabs, or globs survive a manifest round trip.
 scratch_hex_encode() { printf '%s' "$1" | od -An -v -tx1 | tr -d ' \n'; }

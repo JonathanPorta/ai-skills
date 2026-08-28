@@ -798,5 +798,89 @@ class TestGitMetadataIsNotUserActivity(ScratchFixture):
         self.assertIn("unpushed", self._kept_reason("committed"))
 
 
+class TestTheBoundaryFailsClosed(ScratchFixture):
+    """A check that could not RUN is not a check that passed.
+
+    The removal gate marks a window with `touch` and compares against it with
+    `find -newercm`. Both were called with their failures discarded, and the
+    comparison was judged on its stdout alone -- so a missing reference or an
+    unreadable subtree produced no output and was read as "nothing changed",
+    which authorized a recursive delete. Every one of these injects a failure
+    into exactly one of those four operations and requires the entry to survive.
+    """
+
+    def _shim_dir(self, name: str, guard: str) -> str:
+        """A PATH shim that fails `name` only when `guard` says so."""
+        real = shutil.which(name)
+        assert real, f"{name} not found on PATH"
+        d = self.tmp / f"shim-{name}-{len(guard)}"
+        d.mkdir(exist_ok=True)
+        prog = d / name
+        prog.write_text(f'#!/bin/sh\n{guard}\nexec {real} "$@"\n')
+        prog.chmod(0o755)
+        return str(d)
+
+    def _reclaimable_entry(self):
+        entry = self.root / "victim"
+        entry.mkdir()
+        (entry / "data").write_text("the only copy\n")
+        backdate(self.root)
+        return entry
+
+    def _apply_under_shim(self, shim: str):
+        entry = self._reclaimable_entry()
+        manifest = self.manifest_from_dry_run()
+        result = run(SWEEP, "--root", str(self.root), "--apply", "--manifest", manifest,
+                     env_extra={"PATH": shim + os.pathsep + os.environ["PATH"]})
+        return entry, result
+
+    # -- the two marker writes ------------------------------------------------
+
+    def test_a_failed_child_marker_does_not_authorize_deletion(self):
+        shim = self._shim_dir(
+            "touch", 'for a in "$@"; do case "$a" in */window) exit 1;; esac; done')
+        entry, result = self._apply_under_shim(shim)
+        self.assertTrue(entry.exists(), "deleted after the window mark failed")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_a_failed_root_marker_does_not_authorize_deletion(self):
+        shim = self._shim_dir(
+            "touch", 'for a in "$@"; do case "$a" in */window-root) exit 1;; esac; done')
+        entry, result = self._apply_under_shim(shim)
+        self.assertTrue(entry.exists(), "deleted after the root mark failed")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    # -- the two comparisons --------------------------------------------------
+
+    def test_a_failed_child_comparison_does_not_authorize_deletion(self):
+        # Keyed on the mark path, not on -mindepth: the startup capability
+        # probe also passes -newercm, and failing that would abort before the
+        # gate is ever reached, proving nothing about the gate.
+        shim = self._shim_dir("find", (
+            'for a in "$@"; do case "$a" in */window) exit 1;; esac; done'))
+        entry, result = self._apply_under_shim(shim)
+        self.assertTrue(entry.exists(), "deleted after the child comparison failed")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("could not verify", result.stdout)
+
+    def test_a_failed_root_comparison_does_not_authorize_deletion(self):
+        shim = self._shim_dir("find", (
+            'for a in "$@"; do case "$a" in */window-root) exit 1;; esac; done'))
+        entry, result = self._apply_under_shim(shim)
+        self.assertTrue(entry.exists(), "deleted after the root comparison failed")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("could not verify", result.stdout)
+
+    # -- the control: with nothing failing, it still deletes -------------------
+
+    def test_an_untouched_entry_is_still_removed(self):
+        """Guards against closing the hole by refusing everything."""
+        entry = self._reclaimable_entry()
+        manifest = self.manifest_from_dry_run()
+        result = self.sweep("--apply", "--manifest", manifest)
+        self.assertFalse(entry.exists(), "the fail-closed path now refuses everything")
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
