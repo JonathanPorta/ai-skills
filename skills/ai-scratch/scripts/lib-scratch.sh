@@ -128,6 +128,55 @@ scratch_live_writers() {  # <dir>; 0 none, 1 writers present, 2 cannot determine
   return 2
 }
 
+# The idle test, defined once. It previously existed in two places -- the
+# classifier and the post-stage recheck -- and changing only the classifier left
+# apply refusing to remove 767 of the 949 entries it had itself just approved,
+# because the two copies disagreed about whether git metadata counted as
+# activity. Callers must call this rather than inline a find.
+#
+# Two specific caches are ignored, NOT the whole of .git. Pruning the entire
+# directory was wrong: plenty of what lives under .git is user-authored and
+# exists nowhere else, and neither `git status` nor `rev-list --not --remotes`
+# can see it. A hand-written .git/hooks/pre-commit is invisible to both. So is a
+# commit that has been reset away from every ref and survives only in the
+# reflog under .git/logs. Excluding all of .git made each of those look idle and
+# deleted it.
+#
+# What IS ignored is the mtime of the .git entry itself, and the index. The
+# entry's own mtime moves for any write anywhere beneath it and so carries no
+# information of its own; the index is a cache of the working tree, rebuilt by
+# `git reset`, and anything staged in it is reported by the uncommitted check
+# instead. Those two are exactly what a status refresh re-dates, which is what
+# made 1217 repositories look busy after a single sweep.
+#
+# The index is matched under any .git so submodules, whose index lives at
+# .git/modules/<name>/index, are covered too.
+scratch_recently_active() {  # <path> <days>; 0 = active, 1 = idle
+  [ -n "$(find "$1" -mtime -"$2" \
+            ! -name .git \
+            ! \( -name index -path '*/.git/*' \) \
+            -print -quit 2>/dev/null)" ]
+}
+
+# Did anything under <path> change since <mark>? Returns 0 unchanged, 1 changed,
+# 2 COULD NOT TELL -- and the third is the point.
+#
+# find exits nonzero when its reference file is missing or a subtree cannot be
+# read. The previous version discarded both stderr and the exit status and
+# tested only stdout, so a comparison that failed to RUN produced no output and
+# was read as "nothing changed", which authorized a recursive delete. An I/O or
+# permission failure at the last safety gate must never be indistinguishable
+# from a clean result: empty output can mean unchanged, but a nonzero exit
+# cannot.
+scratch_change_since() {  # <path> <mark> [find args...]
+  local path="$1" mark="$2"; shift 2
+  local out rc
+  out="$(find "$path" "$@" -newercm "$mark" -print -quit 2>/dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] || return 2
+  [ -z "$out" ] || return 1
+  return 0
+}
+
 # Hex, not base64: encoding flags differ across platforms, hex does not. Used so
 # candidate names with newlines, tabs, or globs survive a manifest round trip.
 scratch_hex_encode() { printf '%s' "$1" | od -An -v -tx1 | tr -d ' \n'; }

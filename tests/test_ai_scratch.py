@@ -584,5 +584,303 @@ class TestReportingDoesNotDisturbWhatItReports(ScratchFixture):
                          "manifest from the first could never be applied")
 
 
+class TestGitMetadataIsNotUserActivity(ScratchFixture):
+    """Repository housekeeping must not read as someone doing work.
+
+    An index refresh re-dates .git while nothing of value was created. But most
+    of what lives under .git IS worth keeping and is invisible to the other
+    guards, so only two caches are ignored: the .git entry's own mtime and the
+    index. A hand-written hook and a reflog-only commit must survive.
+    """
+
+    def _pushed_repo(self, name: str):
+        remote = self.tmp / f"{name}.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+        repo = self.root / name
+        new_repo(repo)
+        git(repo, "remote", "add", "origin", str(remote))
+        git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
+        git(repo, "fetch", "-q", "origin")
+        return repo
+
+    def _reclaimable(self) -> set:
+        return {ln.split()[1] for ln in self.sweep().stdout.splitlines()
+                if ln.startswith("  FREE  ")}
+
+    def _kept_reason(self, name: str) -> str:
+        for ln in self.sweep("--verbose").stdout.splitlines():
+            if ln.startswith("  KEEP  ") and ln.split()[1] == name:
+                return ln.split("  ")[-1].strip()
+        return ""
+
+    def test_a_touched_git_directory_does_not_pin_a_clean_repo(self):
+        repo = self._pushed_repo("housekeeping")
+        backdate(self.root)
+        # Exactly what `git fetch` or an index refresh leaves behind.
+        for p in (repo / ".git", repo / ".git" / "index"):
+            os.utime(p, None)
+
+        self.assertIn("housekeeping", self._reclaimable(),
+                      "git metadata alone pinned an otherwise idle clean repo")
+
+    def test_a_touched_git_file_does_not_pin_a_linked_worktree(self):
+        parent = self.tmp / "parent"
+        new_repo(parent)
+        git(parent, "worktree", "add", "-q", str(self.root / "linked"), "-b", "wtb")
+        backdate(self.root)
+        os.utime(self.root / "linked" / ".git", None)
+
+        # It is kept for having unpushed work, never for the .git file's date.
+        self.assertNotIn("active within", self._kept_reason("linked"))
+
+    def test_what_the_dry_run_approves_is_what_apply_removes(self):
+        """The classifier and the post-stage recheck must agree about idleness.
+
+        They were separate copies of the same find. When only the classifier
+        learned to ignore git metadata, apply refused 767 of the 949 entries it
+        had itself just approved, reporting every one as written to after
+        staging. Classification alone is not evidence the entry is removable.
+        """
+        repo = self._pushed_repo("housekeeping")
+        backdate(self.root)
+        for p in (repo / ".git", repo / ".git" / "index"):
+            os.utime(p, None)
+
+        manifest = self.manifest_from_dry_run()
+        result = self.sweep("--apply", "--manifest", manifest)
+
+        self.assertNotIn("written to after staging", result.stdout,
+                         "the post-stage recheck disagreed with the classifier")
+        self.assertFalse(repo.exists(), "apply refused what the dry run approved")
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_a_local_hook_is_not_disposable(self):
+        """A hook is user-authored, lives only in this clone, and neither
+        `git status` nor `rev-list --not --remotes` can see it."""
+        repo = self._pushed_repo("hooked")
+        (self.root / "decoy").mkdir()   # so the dry run has something to offer
+        backdate(self.root)
+        hook = repo / ".git" / "hooks" / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 0\n")
+
+        manifest = self.manifest_from_dry_run()
+        self.sweep("--apply", "--manifest", manifest)
+        self.assertFalse((self.root / "decoy").exists(), "the decoy proves apply ran")
+        self.assertTrue(hook.exists(), "a hand-written git hook was deleted")
+
+    def test_a_commit_recoverable_only_through_the_reflog_is_not_disposable(self):
+        """Reset away from every ref, so `rev-list --all --not --remotes` cannot
+        see it. It survives only in .git/logs, and it is still recoverable."""
+        repo = self._pushed_repo("reflog-only")
+        git(repo, "commit", "-q", "--allow-empty", "-m", "reachable from nothing")
+        git(repo, "reset", "-q", "--hard", "HEAD~1")
+        (self.root / "decoy").mkdir()   # so the dry run has something to offer
+        backdate(self.root)
+        os.utime(repo / ".git" / "logs" / "HEAD", None)
+
+        manifest = self.manifest_from_dry_run()
+        self.sweep("--apply", "--manifest", manifest)
+        self.assertFalse((self.root / "decoy").exists(), "the decoy proves apply ran")
+        self.assertTrue(repo.exists(),
+                        "a commit recoverable only through the reflog was deleted")
+
+    def test_git_local_state_created_after_approval_is_not_deleted(self):
+        """Git-local state created after approval must survive.
+
+        The guard that fires here is the manifest, not the idle rule: each entry
+        is recorded with its size, so a hook written after approval changes it
+        and apply refuses the whole set rather than deleting something other
+        than what was reviewed. Worth pinning precisely because it holds even
+        when the idle rule is wrong -- it is the backstop, not the argument.
+        """
+        repo = self._pushed_repo("late-hook")
+        backdate(self.root)
+        manifest = self.manifest_from_dry_run()
+
+        hook = repo / ".git" / "hooks" / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 0\n")
+
+        result = self.sweep("--apply", "--manifest", manifest)
+        self.assertTrue(hook.exists(),
+                        "state created after approval was deleted anyway")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_an_index_write_during_the_removal_transition_is_not_lost(self):
+        """The index is exempt from the AGE test, and must not be exempt from
+        the CHANGE test.
+
+        A writer that mutates the index after the final classification and then
+        closes leaves nothing for the other guards to find: no descriptor to
+        enumerate, and no recent file the idle rule is willing to look at. The
+        writer here runs for the whole apply, so the mutation is guaranteed to
+        land inside the removal window rather than depending on a race being
+        won.
+        """
+        repo = self._pushed_repo("staged-write")
+        backdate(self.root)
+        manifest = self.manifest_from_dry_run()
+
+        # The writer follows the entry INTO staging rather than touching the
+        # path it was moved off, which is what made an earlier version of this
+        # test pass only when it happened to win a race before the rename.
+        stop = self.tmp / "stop"
+        writer = subprocess.Popen(
+            ["sh", "-c",
+             f'while [ ! -f "{stop}" ]; do '
+             f'for i in "{self.root}"/.scratch-sweep-*/*/.git/index; do '
+             f'[ -f "$i" ] && touch "$i"; done; done'])
+        try:
+            result = self.sweep("--apply", "--manifest", manifest)
+        finally:
+            stop.write_text("")
+            writer.wait(timeout=30)
+
+        self.assertTrue(repo.exists(),
+                        "an index mutation during the removal window was deleted")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def _apply_with_writer(self, shell_body: str, name: str):
+        """Run apply while a writer mutates the entry inside staging.
+
+        The writer follows the entry into the quarantine directory rather than
+        touching the path it was moved off, and runs for the whole apply, so the
+        mutation lands inside the removal window by construction.
+        """
+        repo = self._pushed_repo(name)
+        (repo / "script.sh").write_text("#!/bin/sh\necho hi\n")
+        (repo / "script.sh").chmod(0o644)
+        git(repo, "add", "script.sh")
+        git(repo, "commit", "-qm", "add script")
+        git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
+        git(repo, "fetch", "-q", "origin")
+        backdate(self.root)
+        manifest = self.manifest_from_dry_run()
+
+        stop = self.tmp / "stop"
+        writer = subprocess.Popen(
+            ["sh", "-c",
+             f'while [ ! -f "{stop}" ]; do '
+             f'for d in "{self.root}"/.scratch-sweep-*/*; do {shell_body}; done; done'])
+        try:
+            result = self.sweep("--apply", "--manifest", manifest)
+        finally:
+            stop.write_text("")
+            writer.wait(timeout=30)
+        return repo, result
+
+    def test_a_post_staging_mode_change_is_not_lost(self):
+        """chmod moves mode and ctime but NOT mtime, so an mtime comparison
+        called a permission change no change at all and deleted it."""
+        repo, result = self._apply_with_writer(
+            '[ -f "$d/script.sh" ] && chmod +x "$d/script.sh" 2>/dev/null', "moded")
+
+        self.assertTrue(repo.exists(),
+                        "a permission change during the removal window was deleted")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_a_recent_working_tree_edit_still_pins_the_entry(self):
+        repo = self._pushed_repo("edited")
+        backdate(self.root)
+        (repo / "f").write_text("someone is working here\n")
+
+        self.assertNotIn("edited", self._reclaimable(),
+                         "a real edit no longer counts as activity")
+
+    def test_a_commit_that_is_not_on_a_remote_is_still_kept(self):
+        """The safety-critical case: committing writes ONLY to .git, which this
+        change stops treating as activity. The unpushed guard must still hold."""
+        repo = self._pushed_repo("committed")
+        git(repo, "commit", "-q", "--allow-empty", "-m", "exists only here")
+        backdate(self.root)   # old, so only the unpushed guard can save it
+
+        self.assertNotIn("committed", self._reclaimable(),
+                         "a commit that exists nowhere else became reclaimable")
+        self.assertIn("unpushed", self._kept_reason("committed"))
+
+
+class TestTheBoundaryFailsClosed(ScratchFixture):
+    """A check that could not RUN is not a check that passed.
+
+    The removal gate marks a window with `touch` and compares against it with
+    `find -newercm`. Both were called with their failures discarded, and the
+    comparison was judged on its stdout alone -- so a missing reference or an
+    unreadable subtree produced no output and was read as "nothing changed",
+    which authorized a recursive delete. Every one of these injects a failure
+    into exactly one of those four operations and requires the entry to survive.
+    """
+
+    def _shim_dir(self, name: str, guard: str) -> str:
+        """A PATH shim that fails `name` only when `guard` says so."""
+        real = shutil.which(name)
+        assert real, f"{name} not found on PATH"
+        d = self.tmp / f"shim-{name}-{len(guard)}"
+        d.mkdir(exist_ok=True)
+        prog = d / name
+        prog.write_text(f'#!/bin/sh\n{guard}\nexec {real} "$@"\n')
+        prog.chmod(0o755)
+        return str(d)
+
+    def _reclaimable_entry(self):
+        entry = self.root / "victim"
+        entry.mkdir()
+        (entry / "data").write_text("the only copy\n")
+        backdate(self.root)
+        return entry
+
+    def _apply_under_shim(self, shim: str):
+        entry = self._reclaimable_entry()
+        manifest = self.manifest_from_dry_run()
+        result = run(SWEEP, "--root", str(self.root), "--apply", "--manifest", manifest,
+                     env_extra={"PATH": shim + os.pathsep + os.environ["PATH"]})
+        return entry, result
+
+    # -- the two marker writes ------------------------------------------------
+
+    def test_a_failed_child_marker_does_not_authorize_deletion(self):
+        shim = self._shim_dir(
+            "touch", 'for a in "$@"; do case "$a" in */window) exit 1;; esac; done')
+        entry, result = self._apply_under_shim(shim)
+        self.assertTrue(entry.exists(), "deleted after the window mark failed")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_a_failed_root_marker_does_not_authorize_deletion(self):
+        shim = self._shim_dir(
+            "touch", 'for a in "$@"; do case "$a" in */window-root) exit 1;; esac; done')
+        entry, result = self._apply_under_shim(shim)
+        self.assertTrue(entry.exists(), "deleted after the root mark failed")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    # -- the two comparisons --------------------------------------------------
+
+    def test_a_failed_child_comparison_does_not_authorize_deletion(self):
+        # Keyed on the mark path, not on -mindepth: the startup capability
+        # probe also passes -newercm, and failing that would abort before the
+        # gate is ever reached, proving nothing about the gate.
+        shim = self._shim_dir("find", (
+            'for a in "$@"; do case "$a" in */window) exit 1;; esac; done'))
+        entry, result = self._apply_under_shim(shim)
+        self.assertTrue(entry.exists(), "deleted after the child comparison failed")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("could not verify", result.stdout)
+
+    def test_a_failed_root_comparison_does_not_authorize_deletion(self):
+        shim = self._shim_dir("find", (
+            'for a in "$@"; do case "$a" in */window-root) exit 1;; esac; done'))
+        entry, result = self._apply_under_shim(shim)
+        self.assertTrue(entry.exists(), "deleted after the root comparison failed")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("could not verify", result.stdout)
+
+    # -- the control: with nothing failing, it still deletes -------------------
+
+    def test_an_untouched_entry_is_still_removed(self):
+        """Guards against closing the hole by refusing everything."""
+        entry = self._reclaimable_entry()
+        manifest = self.manifest_from_dry_run()
+        result = self.sweep("--apply", "--manifest", manifest)
+        self.assertFalse(entry.exists(), "the fail-closed path now refuses everything")
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

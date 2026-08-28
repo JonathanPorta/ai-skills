@@ -82,7 +82,17 @@ classify() {  # <abs-path> <base-name>
   # Activity anywhere inside, not just the directory inode. Editing a file in
   # place leaves the parent directory's mtime untouched, so -maxdepth 0 would
   # call an actively edited tree idle.
-  if [ -n "$(find "$path" -mtime -"$OLDER_THAN" -print -quit 2>/dev/null)" ]; then
+  #
+  # Git's own metadata is not activity. A fetch, a gc, or an index refresh
+  # re-dates .git without anyone having done work, and a local commit re-dates
+  # it while the thing actually worth protecting -- the commit -- is caught
+  # precisely by the unpushed and uncommitted checks below. Counting it meant
+  # routine repository housekeeping pinned an entry for a whole idle window:
+  # on a real workspace 1364 of 1477 entries had seen no non-git change in
+  # seven days while only about 100 were reported reclaimable. .git is matched
+  # as a name so this prunes the directory in a clone and the file in a linked
+  # worktree alike.
+  if scratch_recently_active "$path" "$OLDER_THAN"; then
     printf 'active within %sd' "$OLDER_THAN"; return 0
   fi
 
@@ -208,6 +218,12 @@ body="$WORK/manifest.body"; grep -v '^sum	' "$MANIFEST" >"$body"
 bad="$(scratch_manifest_bad_records "$body")"
 [ "${bad:-0}" -eq 0 ] || scratch_die "manifest contains $bad malformed candidate record(s)"
 
+# The removal boundary compares ctimes, so a find that cannot do it must stop the
+# run rather than silently fall back to a weaker check. GNU findutils and BSD
+# find both support -newerXY; BusyBox does not.
+find "$WORK" -maxdepth 0 -newercm "$WORK" >/dev/null 2>&1 \
+  || scratch_die "this system's find does not support -newercm, which the removal boundary requires"
+
 m_rootid="$(sed -n 's/^rootid\t//p' "$MANIFEST" | tail -1)"
 # dev:inode only: the root's ctime moves whenever anything is created or removed
 # inside it, which is exactly what a sweep does.
@@ -253,12 +269,37 @@ while IFS="$(printf '\t')" read -r hexname devino kb; do
   [ -z "$late" ] || { printf '  SKIP  %s (%s)\n' "$shown" "$late"; skipped=$((skipped+1)); continue; }
 
   staged="$QUAR/$hexname"
+  # Opens the removal window. Everything from here to the rm is compared against
+  # this mark, so any write landing in between is visible regardless of what it
+  # touched or whether the writer is still around to be seen.
+  touch "$WORK/window" 2>/dev/null || {
+    printf '  SKIP  %s (could not mark the removal window)\n' "$shown"
+    skipped=$((skipped+1)); continue
+  }
+
   mv -- "$target" "$staged" 2>/dev/null || { printf '  SKIP  %s (could not stage)\n' "$shown"; skipped=$((skipped+1)); continue; }
 
   # The decisive check, after the object can no longer be swapped under us.
   # Compare dev:inode only here: renaming an object legitimately updates its
   # ctime, so the full triple would mismatch on every successful stage.
   staged_id="$(scratch_devino "$staged" 2>/dev/null)"
+  # A second mark, taken after the identity above is recorded. The first mark
+  # cannot speak for the staged directory itself because our own rename moved
+  # its ctime; this one is placed after that rename, so the directory can be
+  # compared against it like anything else.
+  #
+  # Narrower than the child scan, and honestly so: a change to the entry's own
+  # directory is only seen if it lands after this point, whereas a change to
+  # anything INSIDE it is seen from before the rename onward. There is no
+  # end-to-end test for this line, because a control for it would have to win a
+  # race rather than assert a fact -- one written against it passed or failed
+  # depending on how long the surrounding code took to run. The child scan below
+  # is the load-bearing check; this narrows an edge it cannot reach.
+  if ! touch "$WORK/window-root" 2>/dev/null; then
+    mv -- "$staged" "$target" 2>/dev/null || printf '  WARN  %s could not be restored; it is in %s\n' "$shown" "$QUAR" >&2
+    printf '  SKIP  %s (could not mark the removal window)\n' "$shown"
+    skipped=$((skipped+1)); continue
+  fi
   if [ "${staged_id%:*}" != "${devino%:*}" ]; then
     mv -- "$staged" "$target" 2>/dev/null || printf '  WARN  %s could not be restored; it is in %s\n' "$shown" "$QUAR" >&2
     printf '  SKIP  %s (identity changed at the deletion boundary)\n' "$shown"; skipped=$((skipped+1)); continue
@@ -279,9 +320,45 @@ while IFS="$(printf '\t')" read -r hexname devino kb; do
   fi
 
   # Now that no one can still be writing, confirm no one already did.
-  if [ -n "$(find "$staged" -mtime -"$OLDER_THAN" -print -quit 2>/dev/null)" ]; then
+  if scratch_recently_active "$staged" "$OLDER_THAN"; then
     mv -- "$staged" "$target" 2>/dev/null || printf '  WARN  %s could not be restored; it is in %s\n' "$shown" "$QUAR" >&2
     printf '  SKIP  %s (written to after staging)\n' "$shown"; skipped=$((skipped+1)); continue
+  fi
+
+  # The last gate, and the only one that exempts nothing at all.
+  #
+  # The idle rule above asks how OLD things are, and deliberately ignores the
+  # git index, because a stale index timestamp is not evidence of work. That
+  # exemption is right for age and wrong for change: a writer that mutated the
+  # index after the final classification and then closed left no descriptor to
+  # enumerate, no recent file the idle rule would look at, and a valid staged
+  # change that apply then deleted.
+  #
+  # Asking a different question closes it. Not "is anything in here recent"
+  # but "did anything in here change since we committed to removing it" --
+  # which needs no exemptions, because during this window nothing has any
+  # business changing at all, index included.
+  # ctime, not mtime. `chmod +x` changes an inode's mode and its ctime while
+  # leaving mtime untouched, so an mtime comparison called a permission change
+  # no change at all and deleted it. Every inode mutation moves ctime -- content,
+  # mode, owner -- so comparing it catches the whole class rather than the one
+  # case that prompted this.
+  #
+  # The staged directory ITSELF is excluded from that scan and checked
+  # separately, because our own rename moved its ctime; comparing it to the mark
+  # would reject every entry. Its full identity was captured immediately after
+  # the rename, so comparing against that instead still catches a change to the
+  # directory itself while ignoring the move we performed.
+  scratch_change_since "$staged" "$WORK/window" -mindepth 1; c_child=$?
+  scratch_change_since "$staged" "$WORK/window-root" -maxdepth 0; c_root=$?
+  if [ "$c_child" -ne 0 ] || [ "$c_root" -ne 0 ]; then
+    mv -- "$staged" "$target" 2>/dev/null || printf '  WARN  %s could not be restored; it is in %s\n' "$shown" "$QUAR" >&2
+    if [ "$c_child" -eq 2 ] || [ "$c_root" -eq 2 ]; then
+      printf '  SKIP  %s (could not verify it was unchanged)\n' "$shown"
+    else
+      printf '  SKIP  %s (changed during the removal transition)\n' "$shown"
+    fi
+    skipped=$((skipped+1)); continue
   fi
 
   # Every removal is accounted for. A silent failure here previously left the
