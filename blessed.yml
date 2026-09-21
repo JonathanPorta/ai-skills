@@ -1,0 +1,12 @@
+schema: blessed/repo/v1
+project: ai-skills
+component: skills
+repo_type: standards-repo
+stage: active
+stack: [markdown, python, bash]
+standards: []
+capabilities: [ai-rules-subtree, sha-pinning]
+tracked_dependencies:
+  ai_rules:
+    origin: https://github.com/JonathanPorta/ai-rules
+    tag: v0.13.1
