@@ -1,0 +1,47 @@
+{
+  "$schema": "https://open-design.ai/schemas/plugin.v1.json",
+  "specVersion": "1.0.0",
+  "name": "recon",
+  "title": "Recon",
+  "version": "0.1.0",
+  "description": "Capture a public website into a research pack at one of five fidelity tiers, from a one-page gist to a Docker-replayable forensic snapshot.",
+  "author": {
+    "name": "Jonathan Porta",
+    "url": "https://github.com/JonathanPorta"
+  },
+  "homepage": "https://github.com/JonathanPorta/ai-skills/tree/main/skills/recon",
+  "icon": "./assets/icon.svg",
+  "tags": [
+    "research",
+    "website",
+    "archive",
+    "design"
+  ],
+  "compat": {
+    "agentSkills": [
+      {
+        "path": "./SKILL.md"
+      }
+    ]
+  },
+  "od": {
+    "kind": "skill",
+    "taskKind": "new-generation",
+    "mode": "export",
+    "platform": "desktop",
+    "scenario": "site-research",
+    "useCase": {
+      "query": "Capture the public website I name as a research pack. Ask for the capture tier, show the preflight plan, and wait for confirmation before downloading. Follow the Recon workflow exactly."
+    },
+    "context": {
+      "skills": [
+        {
+          "path": "./SKILL.md"
+        }
+      ]
+    },
+    "capabilities": [
+      "prompt:inject"
+    ]
+  }
+}

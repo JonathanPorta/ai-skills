@@ -10,6 +10,7 @@
     "url": "https://github.com/JonathanPorta"
   },
   "homepage": "https://github.com/JonathanPorta/ai-skills/tree/main/skills/ai-scratch",
+  "icon": "./assets/icon.svg",
   "tags": [
     "scratch",
     "cleanup",

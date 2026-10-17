@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">AI Scratch</title>
+  <rect width="128" height="128" rx="28" fill="#17243d"/>
+  <path d="M28 44h14v40h44V44h14v54H28z" fill="#8ad8c8"/>
+  <path d="M50 58h28v18H50z" fill="#f5c96a"/>
+  <path d="M50 38h28v14H50z" fill="#f5c96a" opacity="0.55"/>
+  <circle cx="92" cy="30" r="10" fill="#ef6f61"/>
+</svg>
