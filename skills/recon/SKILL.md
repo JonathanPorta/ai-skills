@@ -534,9 +534,13 @@ Every line it writes ends with `# recon:<pack-folder>`, and `remove` deletes
 only lines carrying that exact tag. Existing mappings for the same hostname
 survive both setup and teardown; `add` warns when one exists, because the first
 matching line in `/etc/hosts` wins. Every pack's `hosts.sh` takes the same lock
-beside the hosts file, so concurrent packs cannot overwrite each other, and an
-edit by another program while the script runs is kept: the script reports a
-conflict and changes nothing. A failed write leaves the file untouched.
+beside the hosts file, so concurrent packs cannot overwrite each other. If
+another program edits the file in place, or replaces it, while the script is
+preparing its change, the script keeps that newer file, reports a conflict, and
+changes nothing. One window remains: a program that replaces the file by rename
+in the instant between the script's final identity check and its own rename can
+still be overwritten, and a shell script cannot detect that. A failed write
+leaves the file untouched.
 
 `serve/README.md` must honestly state limitations:
 

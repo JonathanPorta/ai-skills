@@ -76,6 +76,13 @@ The re-review confirmed the ordinary cases and found the remaining edges:
 - The test file no longer probes `ps` at import time, so it loads where `ps` is
   forbidden; the one test that needs `ps` skips itself there.
 
+## Review round 4
+
+Approved with one Minor item, F3: the README and `SKILL.md` said any concurrent
+edit by another program is kept, overstating the guarantee. Both now name the
+remaining window that `hosts.sh` already documents: a program replacing the file
+by rename between the final identity check and the script's own rename.
+
 ## Out of scope (follow-up)
 
 - Making `AI_SCRATCH_ROOT` and `~/.ai-scratch/config` the shared scratch
