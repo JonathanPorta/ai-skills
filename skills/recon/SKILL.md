@@ -120,8 +120,9 @@ Sites are not all the same. A small marketing site is fine to crawl whole; a sin
 
 1. **Same hostname only.** No subdomain spanning. `blog.example.com` and `www.example.com` are separate sites.
 2. **Path-prefix lock derived from the input URL:**
-   - Input has a path → lock to that prefix.
+   - Input has a path → lock to that path and everything below it (`/menu` allows `/menu` and `/menu/...`, never `/menu-old` or `/other`).
    - Input is just the root → allow the whole host.
+   - Widen it only on purpose: pass the site root, or add `--include <regex>`.
 3. **Platform detection.** For known multi-tenant platforms (table below), derive a tighter user-namespace boundary from the URL path. Refuse to escape it.
 4. **Hard caps.** 50 pages, 3 levels deep. Override with `--max-pages` / `--depth`.
 5. **Respect `robots.txt`** by default. Override with `--ignore-robots`.
@@ -134,7 +135,7 @@ Maintain in this skill so it's auditable. Key heuristic: identify the platform, 
 | Input URL | Resolved boundary |
 |---|---|
 | `example.com` | whole host *(single-tenant)* |
-| `example.com/menu` | whole host *(single-tenant)* |
+| `example.com/menu` | `example.com/menu` and below *(path lock)* |
 | `github.com/octocat/hello-world` | `github.com/octocat/hello-world/*` |
 | `github.com/octocat` | `github.com/octocat/*` *(all repos)* |
 | `github.com/octocat/hello-world/issues/5` | back up to `github.com/octocat/hello-world/*` |
@@ -165,7 +166,7 @@ Maintain in this skill so it's auditable. Key heuristic: identify the platform, 
 
 | | `gist` | `design` | `pixel-perfect` | `offline` | `forensic` |
 |---|---|---|---|---|---|
-| HTML pages walked | 1–2 | up to 50 | up to 50 | up to 50 | up to 50 |
+| HTML pages walked | at most 2 | up to 50 | up to 50 | up to 50 | up to 50 |
 | robots.txt | respect | respect | respect | respect | respect |
 | Off-host *assets* (images/CSS/JS/fonts) | no | images only | yes | yes + localized | yes + localized |
 | Off-host *links* followed | never | never | never | never | never |
@@ -186,6 +187,25 @@ Dest:          <scratch>/github-octocat-hello-world-2025-03-14/
 
 Proceed? [Y/n]
 ```
+
+For an input with a path, show the lock the crawler will actually apply:
+
+```
+URL:           https://example.com/menu
+Hostname:      example.com  (single-tenant)
+Boundary:      example.com/menu and below (not /menu-old, not /other)
+Mode:          design
+Page cap:      50
+Depth cap:     3
+robots.txt:    respected
+Dest:          <scratch>/example.com-menu-2025-03-14/
+
+Proceed? [Y/n]
+```
+
+The values shown here are the exact arguments passed to `scripts/crawl.py` in
+Step 2, which enforces them before every request. Never show a limit the crawl
+will not apply.
 
 If the user declines, exit cleanly and suggest override flags.
 
@@ -212,7 +232,7 @@ If the user declines, exit cleanly and suggest override flags.
     ├── nginx.conf
     ├── docker-compose.yml
     ├── certs/               ← only if self-signed TLS chosen
-    ├── hosts.entry
+    ├── hosts.sh             ← adds/removes one tagged /etc/hosts line
     └── README.md            ← how to run, what works, what doesn't
 ```
 
@@ -253,24 +273,32 @@ mkdir -p "$DEST/assets/images" "$DEST/assets/logo"
 cd "$DEST"
 ```
 
-### Step 2 — Mirror the HTML
+### Step 2 — Crawl the pages
+
+Use the bundled crawler. Do **not** substitute `wget --mirror` or any other
+recursive tool: they cannot stop at a page count or hold a path lock while they
+run, so the plan the user approved would not be the crawl that happens.
 
 ```bash
-WGET_BASE=(--mirror --convert-links --adjust-extension --page-requisites
-  --no-parent --timeout=30 --tries=2
-  --reject "*.mp4,*.webm,*.mov,*.zip,*.dmg,*.exe"
-  --user-agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-  --include-directories="$BOUNDARY_PATH"  # only when path-prefix lock applies
-  -Q $((MAX_PAGES * 2))m  # rough byte cap, soft
-  --level "$DEPTH")
+CRAWL_ARGS=(--dest "$DEST" --max-pages "$MAX_PAGES" --depth "$DEPTH")
+[[ -n "$IGNORE_ROBOTS" ]] && CRAWL_ARGS+=(--ignore-robots)
+for re in "${INCLUDES[@]}"; do CRAWL_ARGS+=(--include "$re"); done
+for re in "${EXCLUDES[@]}"; do CRAWL_ARGS+=(--exclude "$re"); done
 
-# Respect robots.txt unless --ignore-robots:
-[[ -z "$IGNORE_ROBOTS" ]] || WGET_BASE+=(-e robots=off)
-
-wget "${WGET_BASE[@]}" "$URL"
+python3 "<skill-dir>/scripts/crawl.py" "$URL" "${CRAWL_ARGS[@]}" | tee "$TMPDIR/recon-crawl.tsv"
 ```
 
-Stop after `MAX_PAGES` HTML pages — count `*.html` files in the output directory.
+`<skill-dir>` is this skill's base directory. The crawler checks every limit
+*before* each request: the page cap, the depth cap, the host and path boundary,
+robots.txt, and the target of every redirect. It saves pages under
+`$DEST/<host>/` and same-host page requisites (images, CSS, JS, icons) alongside
+them. Requisites may come from anywhere on the host; pages never leave the
+boundary. Pass `--no-assets` to fetch pages only.
+
+Each output line is `page <status> <url> <path>`, `asset <status> <url> <path>`,
+or `skip <reason> <url>`; use it for WALK.md. Exit code 3 means the start URL was
+refused (login wall, robots.txt, or fetch failure): stop and tell the user. Keep
+the crawl log out of the pack.
 
 ### Step 3 — SPA sanity check
 
@@ -278,7 +306,7 @@ If the largest fetched HTML page has < 500 chars of visible text after stripping
 
 ### Step 4 — Pull off-host assets at full resolution
 
-`wget --page-requisites` only stays on-host. Modern sites serve images/fonts/CSS/JS from CDNs.
+The crawler only fetches same-host requisites. Modern sites serve images/fonts/CSS/JS from CDNs.
 
 Process for each asset class:
 
@@ -293,7 +321,7 @@ Process for each asset class:
 **Tier-gated additions:**
 
 - `pixel-perfect+`: also pull all referenced CSS, JS (skip analytics — see omit list), fonts (`assets/css/`, `assets/js/`, `assets/fonts/`).
-- `offline+`: after pulling, rewrite all HTML/CSS to point at local paths. `httrack` does this better than wget for recursive `@import` / `url()` chains; if available, prefer it for offline. Otherwise post-process with sed.
+- `offline+`: after pulling, rewrite all HTML/CSS in the pack to point at local paths, including `@import` and `url()` chains. Rewrite the files already downloaded; do not run `httrack` or another recursive crawler to do it, because it would fetch outside the confirmed page cap and boundary.
 - All tiers: pull `<link rel="apple-touch-icon">` (preferred) or `<link rel="icon">` → `assets/logo/favicon.<ext>`. Pull any `<img>` inside the first `<header>`/`<nav>` whose src or alt contains "logo" → `assets/logo/`.
 
 ### Step 5 — Detect tech stack (TECHSTACK.md)
@@ -439,7 +467,7 @@ Pages walked: <N>
 ```sh
 make dev    # serves the captured HTML at http://127.0.0.1:8765/
 make open   # opens the homepage in your default browser
-make stop   # kills the server
+make stop   # stops the server that make dev started
 ```
 
 ## Hand-off notes
@@ -453,54 +481,19 @@ make stop   # kills the server
 
 All tiers that capture HTML (`design`, `pixel-perfect`, `offline`, `forensic`) ship a Makefile so the user can `cd <dest> && make dev` and immediately see the capture in a browser, without having to remember which subdirectory holds the HTML or what port to pick. `gist` skips this step (no HTML to serve).
 
-Substitute `<hostname>` with the actual mirrored hostname directory at write time. The same template works for all four tiers — `make docker` self-detects whether `serve/` is present (forensic only).
+Copy the template at `<skill-dir>/assets/templates/Makefile` into the pack and
+replace `__ROOT__` with the crawled hostname directory (the folder under `$DEST`
+that `crawl.py` created). Do not retype the Makefile from memory: the template
+is tested.
 
-```makefile
-# Recon pack — local viewer. Generated by /recon at capture time.
-#
-# Quick start:
-#   make dev      start a static HTTP server (default: http://127.0.0.1:8765/)
-#   make open     open the homepage in your default browser
-#   make stop     kill any server on $(PORT)
-#   make docker   (forensic only) run the docker compose stack in serve/
-#   make help     show this list
-#
-# Override port or bind address:
-#   make dev PORT=9000 HOST=0.0.0.0
-
-PORT ?= 8765
-HOST ?= 127.0.0.1
-ROOT := <hostname>
-URL  := http://$(HOST):$(PORT)/
-
-.DEFAULT_GOAL := help
-.PHONY: help dev run serve open stop docker
-
-help: ## show available targets
-	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  \033[1m%-8s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
-
-dev: ## start a static HTTP server pointing at the captured HTML
-	@echo "Serving $(ROOT)/ at $(URL)"
-	@echo "Press Ctrl+C to stop."
-	@cd $(ROOT) && python3 -m http.server $(PORT) --bind $(HOST)
-
-run: dev   ## alias for dev
-serve: dev ## alias for dev
-
-open: ## open the captured homepage in your default browser
-	@if command -v open >/dev/null; then open $(URL); \
-	elif command -v xdg-open >/dev/null; then xdg-open $(URL); \
-	else echo "Open $(URL) manually."; fi
-
-stop: ## kill any process listening on $(PORT)
-	@pid=$$(lsof -ti tcp:$(PORT) 2>/dev/null); \
-	if [ -n "$$pid" ]; then kill $$pid && echo "killed pid $$pid on :$(PORT)"; \
-	else echo "nothing listening on :$(PORT)"; fi
-
-docker: ## (forensic only) bring up the docker compose replay stack in serve/
-	@if [ -d serve ]; then cd serve && docker compose up; \
-	else echo "No serve/ — this pack wasn't captured at forensic tier."; exit 1; fi
+```bash
+sed "s|__ROOT__|$HOST_DIR|" "<skill-dir>/assets/templates/Makefile" > "$DEST/Makefile"
 ```
+
+The same file serves all four tiers; `make docker` checks whether `serve/`
+exists. `make dev` records the server's PID and port in `.recon-dev.pid`, and
+`make stop` signals only that process, after confirming it is still the pack's
+server. Nothing else listening on the port is touched.
 
 **Caveats to mention to the user once the server is up** (do this in the Closing summary, not in the Makefile itself):
 
@@ -516,9 +509,24 @@ serve/
 ├── nginx.conf             # server_name <orig-host>; MIME types; trailing-slash; rewrites
 ├── docker-compose.yml     # exposes :80 (and :443 if TLS chosen)
 ├── certs/                 # only if self-signed TLS chosen
-├── hosts.entry            # `127.0.0.1 <orig-host>` — paste into /etc/hosts to use
+├── hosts.sh               # adds or removes one tagged /etc/hosts line
 └── README.md              # how to run + what works / doesn't
 ```
+
+Write `hosts.sh` from `<skill-dir>/assets/templates/hosts.sh`, replacing
+`__HOST__` with the original hostname and `__TAG__` with the pack folder name,
+then make it executable:
+
+```bash
+sed -e "s|__HOST__|$ORIG_HOST|g" -e "s|__TAG__|$(basename "$DEST")|g" \
+  "<skill-dir>/assets/templates/hosts.sh" > "$DEST/serve/hosts.sh"
+chmod +x "$DEST/serve/hosts.sh"
+```
+
+Every line it writes ends with `# recon:<pack-folder>`, and `remove` deletes
+only lines carrying that exact tag. Existing mappings for the same hostname
+survive both setup and teardown; `add` warns when one exists, because the first
+matching line in `/etc/hosts` wins.
 
 `serve/README.md` must honestly state limitations:
 
@@ -531,17 +539,23 @@ serve/
 Run instructions:
 
 ```bash
-sudo sh -c "cat hosts.entry >> /etc/hosts"   # one-time
-docker compose up                            # serves at original FQDN
+sudo ./hosts.sh add      # one-time: maps <orig-host> to 127.0.0.1, tagged
+docker compose up        # serves at the original hostname
 # When done:
-sudo sed -i '' "/<orig-host>/d" /etc/hosts   # macOS; remove the entry
+sudo ./hosts.sh remove   # removes only the tagged line this pack added
 ```
+
+Never tell the user to clean up with a pattern that matches the bare hostname
+(for example `sed '/<orig-host>/d'`): it deletes their own mappings too.
 
 ### Step 12 — `gist` mode (special-cased)
 
 Skip steps 4–11 (no HTML mirror, no asset library, no Makefile). Only:
 
-1. Fetch home page + first navigated "about" link (if any).
+1. Fetch the home page with `crawl.py --max-pages 1 --no-assets` into a temporary
+   directory. If it links to an in-boundary "about" page, fetch that one the same
+   way. That is at most two page requests; delete the temporary copies once
+   `GIST.md` is written.
 2. Extract copy + voice fingerprint.
 3. Lightweight tech sniff (1-line read, not full TECHSTACK).
 4. Lightweight DNS sniff (1-line read, not full DNS.md).
@@ -593,8 +607,8 @@ Specifically tracking domains to exclude from any captured JS:
 
 ## When NOT to use
 
-- Sites that require login — wget can't reach gated content.
-- JS-rendered SPAs with no SSR — wget gets a near-empty shell. Asset library may still be worth pulling; warn first.
+- Sites that require login — the crawler can't reach gated content.
+- JS-rendered SPAs with no SSR — the crawler gets a near-empty shell. Asset library may still be worth pulling; warn first.
 - Anything you don't have a legitimate reason to scrape. Public marketing sites and the user's own properties are fine. Before scraping anything else (a competitor's gated product docs, a person's profile on a platform, etc.), confirm intent and respect robots.txt.
 
 ## Closing summary

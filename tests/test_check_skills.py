@@ -88,8 +88,9 @@ class SkillValidatorTests(unittest.TestCase):
         self.assertEqual(checkpoint.attrib["viewBox"], "0 0 128 128")
         self.assertEqual(handoff.attrib["viewBox"], checkpoint.attrib["viewBox"])
 
-        checkpoint_paths = [element.attrib for element in checkpoint if element.tag.endswith("path")]
-        handoff_paths = [element.attrib for element in handoff if element.tag.endswith("path")]
+        # iter() so art wrapped in a centering <g transform> still counts.
+        checkpoint_paths = [element.attrib for element in checkpoint.iter() if element.tag.endswith("path")]
+        handoff_paths = [element.attrib for element in handoff.iter() if element.tag.endswith("path")]
         amber = {"d": "M56 55h38v14H70v16H56z", "fill": "#f5c96a"}
         mint_ring = {
             "d": "M34 29h74v70H34zM48 43v42h46V43z",
@@ -101,8 +102,11 @@ class SkillValidatorTests(unittest.TestCase):
         self.assertIn(amber, checkpoint_paths)
         self.assertIn(amber, handoff_paths)
         self.assertIn(mint_ring, handoff_paths)
-        self.assertTrue(any(element.tag.endswith("circle") for element in checkpoint))
-        self.assertFalse(any(element.tag.endswith("circle") for element in handoff))
+        self.assertTrue(any(element.tag.endswith("circle") for element in checkpoint.iter()))
+        self.assertFalse(any(element.tag.endswith("circle") for element in handoff.iter()))
+        # The handoff frame spans x 34–108; its group shift must center it in the tile.
+        group = next(element for element in handoff.iter() if element.tag.rsplit("}", 1)[-1] == "g")
+        self.assertEqual(group.attrib.get("transform"), "translate(-7 0)")
 
     def test_agent_skill_field_limits_are_enforced(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

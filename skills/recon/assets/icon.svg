@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
   <title id="title">Recon</title>
   <rect width="128" height="128" rx="28" fill="#17243d"/>
-  <path d="M26 24h58v80H26zM40 38v52h30V38z" fill="#8ad8c8" fill-rule="evenodd" clip-rule="evenodd"/>
-  <path d="M46 46h18v8H46zM46 60h18v8H46z" fill="#f5c96a"/>
+  <path d="M27 29h74v70H27zM41 43v42h46V43z" fill="#8ad8c8" fill-rule="evenodd" clip-rule="evenodd"/>
+  <path d="M49 51h24v8H49zM49 65h24v8H49z" fill="#f5c96a"/>
   <path d="M86 58a20 20 0 1 1 0 40a20 20 0 1 1 0-40zm0 10a10 10 0 1 0 0 20a10 10 0 1 0 0-20z" fill="#ef6f61" fill-rule="evenodd" clip-rule="evenodd"/>
   <path d="M97 93l10 10-7 7-10-10z" fill="#ef6f61"/>
 </svg>

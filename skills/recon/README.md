@@ -22,17 +22,27 @@ handling, destination) and waits for confirmation before downloading.
 
 ## Requirements
 
-- `curl`, `wget`, `dig`, `whois`, and `python3` on `PATH`.
-- Optional: `httrack` (better URL rewriting for `offline`), `playwright` (a
-  homepage screenshot for `gist`), and Docker (to run a `forensic` replay).
+- Python 3.10 or newer, `curl`, `dig`, and `whois` on `PATH`. The bundled
+  crawler uses only Python's standard library.
+- Optional: `playwright` (a homepage screenshot for `gist`) and Docker (to run a
+  `forensic` replay).
 
 ## Boundaries
 
-`recon` stays on the hostname it was given and never follows off-host links. On
-multi-tenant platforms such as GitHub, X, LinkedIn, Medium, or YouTube, it locks
-to the user or project namespace in the URL and refuses a bare platform root
-unless told otherwise. It respects `robots.txt` by default, caps a crawl at 50
-pages and 3 levels deep, and never captures analytics or tracking scripts.
+Pages are fetched by `scripts/crawl.py`, one request at a time. It checks every
+limit before each request, so the crawl cannot exceed the plan you confirmed:
+
+- **Host:** the hostname you gave, exactly. Off-host links are never followed.
+- **Path:** a URL with a path (`example.com/menu`) is locked to that path and
+  below. Give the site root, or add `--include`, to widen it.
+- **Platforms:** on GitHub, X, LinkedIn, Medium, YouTube and similar, the lock is
+  the user or project namespace, and a bare platform root is refused unless you
+  say otherwise.
+- **Caps:** 50 page requests and 3 levels deep by default.
+- **robots.txt** is respected by default, and redirects that leave the boundary
+  are not followed.
+
+Analytics and tracking scripts are never captured.
 
 Only point it at sites you have a legitimate reason to capture: public marketing
 sites and your own properties are fine. It cannot reach login-walled content.
@@ -78,6 +88,13 @@ Without an explicit destination, packs go to `$AI_SCRATCH_DIR` if it is set,
 otherwise to `~/ai-scratch/`, in a folder named `<host>-<YYYY-MM-DD>`. An
 existing non-empty folder is never overwritten; `recon` offers alternative names
 instead.
+
+## Viewing and replaying a pack
+
+`make dev` serves the capture locally and `make stop` stops that server only; it
+never touches anything else listening on the port. A `forensic` pack's
+`serve/hosts.sh add` and `remove` manage one tagged `/etc/hosts` line, so your
+own mappings for the same hostname are left alone.
 
 Scratch directories are meant to be temporary. Copy a pack somewhere permanent
 if you intend to keep it.
