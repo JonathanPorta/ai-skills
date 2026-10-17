@@ -1,0 +1,8 @@
+interface:
+  display_name: AI Scratch
+  short_description: Keep agent scratch work in one guarded place
+  default_prompt: Use $ai-scratch to put review clones and generated files in the designated scratch directory, or to propose a confirm-first cleanup of idle entries there.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  allow_implicit_invocation: true

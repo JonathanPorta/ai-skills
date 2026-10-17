@@ -34,6 +34,44 @@ The built-in default is a subdirectory of `/tmp`, never `/tmp` itself — sweepi
 a shared temp directory would reach files this tool did not create. `--set`
 refuses `/`, `$HOME`, `/tmp`, `/var/tmp`, and anything shallower than two levels.
 
+## Install for direct use
+
+Clone and validate a reviewed revision, then link the skill into your agent's
+skill directory:
+
+```bash
+git clone git@github.com:JonathanPorta/ai-skills.git "$HOME/src/ai-skills"
+cd "$HOME/src/ai-skills"
+make check
+export AI_SKILLS_REPO="$PWD"
+
+# Claude Code
+ln -s "$AI_SKILLS_REPO/skills/ai-scratch" "$HOME/.claude/skills/ai-scratch"
+# Codex
+ln -s "$AI_SKILLS_REPO/skills/ai-scratch" "$HOME/.agents/skills/ai-scratch"
+```
+
+For Open Design, import the plugin from **Plugins → Import plugin → From
+GitHub**:
+
+```text
+github:JonathanPorta/ai-skills@main/skills/ai-scratch
+```
+
+The scripts are bash and need `git`, `find`, `stat`, `du`, and `lsof`.
+
+## Run directly
+
+```bash
+scripts/scratch-setup.sh                      # show the root and where it came from
+scripts/scratch-setup.sh --set ~/ai-scratch   # save a root (creates the directory)
+scripts/scratch-setup.sh --idle-days 14       # default idle window for the sweep
+scripts/scratch-setup.sh --protect NAME       # pin an entry so cleanup never takes it
+```
+
+On first use, an agent following `SKILL.md` runs `scratch-setup.sh`, presents
+its recommendation, and writes the config only after you answer.
+
 ## Cleanup in one line
 
 ```bash

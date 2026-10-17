@@ -1,0 +1,8 @@
+interface:
+  display_name: Recon
+  short_description: Capture a public website as a research pack
+  default_prompt: Use $recon to capture this public website as a research pack. Ask which capture tier I want, show the preflight plan, and wait for my go-ahead before downloading anything.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  allow_implicit_invocation: true

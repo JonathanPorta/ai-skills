@@ -10,6 +10,8 @@ additive plugin sidecar stay beside the portable `SKILL.md` they describe.
 |---|---|---|---|---|
 | [`package-design-checkpoint`](skills/package-design-checkpoint/) | Freeze an interim design state for review, comparison, or later resumption with a root index and concise changelog. | First-class GitHub plugin; current runtime contract-tested at `fe1231e…` | Format-compatible; helper tested, direct harness not yet verified | Format-compatible; not yet verified |
 | [`package-design-handoff`](skills/package-design-handoff/) | Deliver an accepted, complete, implementation-ready design package with manifest, checksums, and provenance. | First-class GitHub plugin; current runtime contract-tested at `fe1231e…` | Verified | Format-compatible; not yet verified |
+| [`ai-scratch`](skills/ai-scratch/) | Keep review clones and generated files in one designated scratch directory, and reclaim its disk through a confirm-first cleanup. | Format-compatible; not yet verified | Format-compatible; not yet verified | Verified with Claude Code |
+| [`recon`](skills/recon/) | Capture a public website as a research pack, from a one-page gist to a Docker-replayable forensic snapshot. | Format-compatible; not yet verified | Format-compatible; not yet verified | Verified with Claude Code (`gist` tier) |
 
 Compatibility labels are conservative:
 
@@ -49,8 +51,12 @@ ai-skills/
 │   │   ├── agents/openai.yaml
 │   │   ├── assets/
 │   │   └── scripts/
-│   └── package-design-handoff/
-│       └── ...same portable plugin shape...
+│   ├── package-design-handoff/
+│   │   └── ...same portable plugin shape...
+│   ├── ai-scratch/
+│   │   └── ...same shape...
+│   └── recon/
+│       └── ...same shape, no scripts/...
 ├── scripts/                 # Collection validation
 ├── tests/                   # Behavioral, security, and integration tests
 ├── tasks/                   # Requirements and implementation records
@@ -69,6 +75,8 @@ you need:
 ```text
 github:JonathanPorta/ai-skills@main/skills/package-design-checkpoint
 github:JonathanPorta/ai-skills@main/skills/package-design-handoff
+github:JonathanPorta/ai-skills@main/skills/ai-scratch
+github:JonathanPorta/ai-skills@main/skills/recon
 ```
 
 This GitHub-subdirectory import installs an Open Design **plugin**. It is
@@ -124,6 +132,16 @@ ln -s "$AI_SKILLS_REPO/skills/package-design-checkpoint" \
   "$HOME/.agents/skills/package-design-checkpoint"
 ln -s "$AI_SKILLS_REPO/skills/package-design-handoff" \
   "$HOME/.agents/skills/package-design-handoff"
+ln -s "$AI_SKILLS_REPO/skills/ai-scratch" "$HOME/.agents/skills/ai-scratch"
+ln -s "$AI_SKILLS_REPO/skills/recon" "$HOME/.agents/skills/recon"
+```
+
+For Claude Code, link the same directories into `~/.claude/skills/`:
+
+```bash
+mkdir -p "$HOME/.claude/skills"
+ln -s "$AI_SKILLS_REPO/skills/ai-scratch" "$HOME/.claude/skills/ai-scratch"
+ln -s "$AI_SKILLS_REPO/skills/recon" "$HOME/.claude/skills/recon"
 ```
 
 Symlinking keeps the installed agent on the reviewed checkout. Review and run
@@ -143,7 +161,10 @@ independent plugin already carries the metadata its consumers need:
   advertises portability, while `od.context.skills[{"path":"./SKILL.md"}]`
   activates the plugin-local workflow and companion-file staging.
 - Git records collection history and reviewable changes.
-- Both helpers use only Python's standard library.
+- The packaging helpers use only Python's standard library. The `ai-scratch`
+  scripts are bash and use standard system tools (`find`, `stat`, `du`, `lsof`)
+  plus git. `recon` has no bundled code; it
+  drives `wget`, `curl`, `dig`, and `whois`.
 
 Add a generated catalog or standard collection manifest when a stable
 distribution or dependency-resolution contract makes it useful.
