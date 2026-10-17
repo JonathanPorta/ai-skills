@@ -45,6 +45,22 @@ listed below as a follow-up. In the same round, the `package-design-handoff` ico
 was centered (its frame sat 7 px right of center) and the `recon` icon's page was
 resized to match that frame.
 
+## Review round 2
+
+The re-review confirmed the ordinary cases and found the remaining edges:
+
+- **F1:** a `/menu` page linking to `/menu/%2e%2e/other` was requested, and a 403
+  `robots.txt` was treated as an empty policy. The crawler now checks every path
+  after repeated percent-decoding and dot-segment resolution, and treats only a
+  404/410 `robots.txt` as absent. Any other status or a network failure stops
+  the crawl before the first page request unless `--ignore-robots` is given.
+- **F2:** `hosts.sh remove` truncated the file before writing it, so a failed
+  write destroyed it; a stale PID file was accepted if the PID now ran any
+  `http.server` on the port. `hosts.sh` now writes a copy beside the file and
+  renames it into place, refusing symlinks, so any failure leaves the original
+  byte-for-byte. `make dev` records the server's start time and runs it with this
+  pack's absolute `--directory`; `make stop` signals the PID only when both match.
+
 ## Out of scope (follow-up)
 
 - Making `AI_SCRATCH_ROOT` and `~/.ai-scratch/config` the shared scratch
@@ -58,6 +74,8 @@ resized to match that frame.
 | 1 | `cmp` of the installed and committed `SKILL.md` reports no difference. |
 | 2–4 | See the diff. |
 | 3 | All four icons rendered side by side for review. |
-| 5 | `make check`: 4 skills validated, 126 tests passed, 1 skipped. |
+| 5 | `make check`: 4 skills validated, 135 tests passed, 1 skipped. |
+| F1 (round 2) | `tests/test_recon.py`: six encoded and dot-segment escapes from `/menu` are never requested; `robots.txt` returning 401, 403, 500, 503, or dropping the connection exits 3 with no page request; 404/410 proceed; `--ignore-robots` overrides. |
+| F2 (round 2) | `tests/test_recon.py`: with `mv`, `cp`, or `awk` failing, `add` and `remove` leave the hosts file byte-identical with no temporary file left; an unwritable directory and a symlinked hosts file are refused unchanged; a stale PID file naming an identical `http.server` for the same pack is not trusted. The previous `hosts.sh` was confirmed to leave only `BROKEN` when its write failed. |
 | F1 | `tests/test_recon.py`: `--max-pages 1` requests exactly one page on a four-page site; a `/menu` crawl never requests `/other` or `/menu-old`; out-of-boundary redirects, robots.txt, depth, and off-host links are all refused before the request. |
 | F2 | `tests/test_recon.py`: an unrelated listener on the port survives `make stop`; the `make dev` server is stopped; a stale PID file is not trusted; a pre-existing `example.com` hosts line survives `add` and `remove`, and the file keeps its mode. The old `stop` target was confirmed to kill the unrelated listener. |

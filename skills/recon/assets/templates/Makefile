@@ -22,12 +22,14 @@ PIDFILE := .recon-dev.pid
 help: ## show available targets
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  \033[1m%-8s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-# The shell records its own PID and port, then execs the server, so the PID file
-# names exactly the process `make stop` may signal.
+# The shell records its own PID, port, and start time, then execs the server, so
+# the PID keeps that start time and its command line names this pack's directory.
+# `make stop` signals the PID only if all three still match.
 dev: ## start a static HTTP server pointing at the captured HTML
 	@echo "Serving $(ROOT)/ at $(URL)"
 	@echo "Press Ctrl+C to stop."
-	@echo "$$$$ $(PORT)" > $(PIDFILE) && cd $(ROOT) && exec python3 -m http.server $(PORT) --bind $(HOST)
+	@echo "$$$$ $(PORT) $$(ps -o lstart= -p $$$$ 2>/dev/null | awk '{$$1=$$1; print}')" > $(PIDFILE) && \
+	exec python3 -m http.server $(PORT) --bind $(HOST) --directory "$(CURDIR)/$(ROOT)"
 
 run: dev   ## alias for dev
 serve: dev ## alias for dev
@@ -39,11 +41,15 @@ open: ## open the captured homepage in your default browser
 
 stop: ## stop the server that `make dev` started, and nothing else
 	@if [ ! -f $(PIDFILE) ]; then echo "No server started by make dev."; exit 0; fi; \
-	read pid port < $(PIDFILE); \
-	if ps -o command= -p "$$pid" 2>/dev/null | grep -q "http.server $$port"; then \
-	  kill "$$pid" && echo "Stopped the make dev server (pid $$pid, port $$port)."; \
-	else echo "The make dev server is no longer running."; fi; \
-	rm -f $(PIDFILE)
+	read pid port started < $(PIDFILE); \
+	now=$$(ps -o lstart= -p "$$pid" 2>/dev/null | awk '{$$1=$$1; print}'); \
+	cmd=$$(ps -o command= -p "$$pid" 2>/dev/null); \
+	case "$$cmd" in *"http.server $$port "*"--directory $(CURDIR)/$(ROOT)"*) ours=yes;; *) ours=no;; esac; \
+	if [ -n "$$started" ] && [ "$$now" = "$$started" ] && [ "$$ours" = yes ]; then \
+	  kill "$$pid" && echo "Stopped the make dev server (pid $$pid, port $$port)." && rm -f $(PIDFILE); \
+	elif [ -z "$$now" ] && kill -0 "$$pid" 2>/dev/null; then \
+	  echo "Cannot inspect pid $$pid to confirm it is this pack's server; nothing was stopped."; \
+	else echo "The make dev server is no longer running; nothing was stopped."; rm -f $(PIDFILE); fi
 
 docker: ## (forensic only) bring up the docker compose replay stack in serve/
 	@if [ -d serve ]; then cd serve && docker compose up; \

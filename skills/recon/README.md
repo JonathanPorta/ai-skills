@@ -39,8 +39,11 @@ limit before each request, so the crawl cannot exceed the plan you confirmed:
   the user or project namespace, and a bare platform root is refused unless you
   say otherwise.
 - **Caps:** 50 page requests and 3 levels deep by default.
-- **robots.txt** is respected by default, and redirects that leave the boundary
-  are not followed.
+- **Encoded paths:** every link is checked after percent-decoding and resolving
+  `.`/`..` segments, so `/menu/%2e%2e/other` cannot leave a `/menu` lock.
+- **robots.txt** is respected by default. If it cannot be read (anything other
+  than "not found"), the crawl stops before requesting any page unless you pass
+  `--ignore-robots`. Redirects that leave the boundary are not followed.
 
 Analytics and tracking scripts are never captured.
 

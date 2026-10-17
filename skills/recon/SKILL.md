@@ -296,8 +296,13 @@ them. Requisites may come from anywhere on the host; pages never leave the
 boundary. Pass `--no-assets` to fetch pages only.
 
 Each output line is `page <status> <url> <path>`, `asset <status> <url> <path>`,
-or `skip <reason> <url>`; use it for WALK.md. Exit code 3 means the start URL was
-refused (login wall, robots.txt, or fetch failure): stop and tell the user. Keep
+or `skip <reason> <url>`; use it for WALK.md. Exit code 3 means the crawl was
+refused: the start URL failed or is disallowed (login wall, robots.txt, fetch
+failure), or robots.txt could not be read. Only a 404 or 410 counts as "no
+robots.txt"; a 401, 403, 5xx, or network failure stops the crawl before any page
+is requested. Stop and tell the user, and offer `--ignore-robots` only as their
+explicit choice. Every path is also checked after percent-decoding and resolving
+`.`/`..` segments, so encoded paths cannot leave the lock. Keep
 the crawl log out of the pack.
 
 ### Step 3 — SPA sanity check
@@ -491,9 +496,11 @@ sed "s|__ROOT__|$HOST_DIR|" "<skill-dir>/assets/templates/Makefile" > "$DEST/Mak
 ```
 
 The same file serves all four tiers; `make docker` checks whether `serve/`
-exists. `make dev` records the server's PID and port in `.recon-dev.pid`, and
-`make stop` signals only that process, after confirming it is still the pack's
-server. Nothing else listening on the port is touched.
+exists. `make dev` records the server's PID, port, and start time in
+`.recon-dev.pid`, and runs it with `--directory` set to this pack's absolute
+path. `make stop` signals that PID only if its start time and command line still
+match, so a recycled PID, even one running an identical server, is left alone.
+If it cannot inspect the process, it stops nothing and says so.
 
 **Caveats to mention to the user once the server is up** (do this in the Closing summary, not in the Makefile itself):
 

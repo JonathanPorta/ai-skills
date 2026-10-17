@@ -8,6 +8,8 @@
 #
 # Every line this script writes ends with the tag below. `remove` deletes lines
 # carrying exactly that tag, so existing mappings for the host are never touched.
+# Changes are written to a temporary copy beside the hosts file and renamed into
+# place, so a failure at any step leaves the original file exactly as it was.
 # Set HOSTS_FILE to operate on a different file.
 set -eu
 
@@ -17,8 +19,33 @@ HOSTS_FILE="${HOSTS_FILE:-/etc/hosts}"
 LINE="127.0.0.1 $HOST $TAG"
 HOST_RE="$(printf '%s' "$HOST" | sed 's/[.[\*^$]/\\&/g')"
 
+die() {
+  echo "hosts.sh: $*" >&2
+  exit 1
+}
+
 has_tagged_line() {
   grep -qxF "$LINE" "$HOSTS_FILE"
+}
+
+# Rewrite the hosts file for `add` or `remove` without ever truncating it.
+replace_hosts() {
+  [ -L "$HOSTS_FILE" ] && die "$HOSTS_FILE is a symlink; point HOSTS_FILE at its target. Nothing was changed."
+  dir="$(dirname -- "$HOSTS_FILE")"
+  unchanged="$HOSTS_FILE is unchanged"
+  tmp="$(mktemp "$dir/.hosts.recon.XXXXXX")" || die "cannot create a temporary file in $dir; $unchanged."
+  trap 'rm -f "$tmp"' EXIT INT TERM
+  cp -p "$HOSTS_FILE" "$tmp" || die "cannot copy $HOSTS_FILE; $unchanged."
+  if [ "$1" = add ]; then
+    { awk 1 "$HOSTS_FILE" && printf '%s\n' "$LINE"; } > "$tmp" || die "cannot write the new file; $unchanged."
+  else
+    status=0
+    grep -vxF "$LINE" "$HOSTS_FILE" > "$tmp" || status=$?
+    [ "$status" -le 1 ] || die "cannot read $HOSTS_FILE; $unchanged."
+  fi
+  mv -f "$tmp" "$HOSTS_FILE" || die "cannot replace $HOSTS_FILE; $unchanged. Remove the line ending in '$TAG' by hand."
+  trap - EXIT INT TERM
+  if command -v restorecon >/dev/null 2>&1; then restorecon "$HOSTS_FILE" 2>/dev/null || true; fi
 }
 
 case "${1:-}" in
@@ -30,7 +57,7 @@ case "${1:-}" in
     if grep -vF "$TAG" "$HOSTS_FILE" | grep -Eq "^[^#]*[[:space:]]$HOST_RE([[:space:]]|$)"; then
       echo "Note: $HOSTS_FILE already maps $HOST elsewhere; the first match wins, so check the order." >&2
     fi
-    printf '%s\n' "$LINE" >> "$HOSTS_FILE"
+    replace_hosts add
     echo "Added: $LINE"
     ;;
   remove)
@@ -38,11 +65,7 @@ case "${1:-}" in
       echo "Nothing to remove for $HOST."
       exit 0
     fi
-    tmp="$(mktemp)"
-    trap 'rm -f "$tmp"' EXIT
-    grep -vxF "$LINE" "$HOSTS_FILE" > "$tmp" || true
-    # Rewrite in place so the file keeps its owner and permissions.
-    cat "$tmp" > "$HOSTS_FILE"
+    replace_hosts remove
     echo "Removed: $LINE"
     ;;
   status)

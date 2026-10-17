@@ -16,7 +16,8 @@ Prints one tab-separated line per decision:
     skip   <reason>  <url>
 
 Exit codes: 0 crawl ran, 2 bad arguments or start URL outside the boundary,
-3 start URL refused (login wall, robots.txt, or fetch failure).
+3 refused: the start URL failed or is disallowed, or robots.txt could not be
+read (anything other than 404/410) and --ignore-robots was not given.
 """
 
 from __future__ import annotations
@@ -67,10 +68,14 @@ class Boundary:
     def allows_page(self, url: str) -> bool:
         if not self.same_host(url) or any(p.search(url) for p in self.exclude):
             return False
-        path = urllib.parse.urlsplit(url).path or "/"
-        if self.prefix == "/" or path == self.prefix or path.startswith(self.prefix + "/"):
+        # A server may decode %2e/%2f and resolve dot segments before routing, so
+        # every interpretation of the path must stay inside the prefix.
+        if all(self.in_prefix(path) for path in path_interpretations(url)):
             return True
         return any(p.search(url) for p in self.include)
+
+    def in_prefix(self, path: str) -> bool:
+        return self.prefix == "/" or path == self.prefix or path.startswith(self.prefix + "/")
 
     def allows_asset(self, url: str) -> bool:
         return self.same_host(url) and not any(p.search(url) for p in self.exclude)
@@ -85,6 +90,25 @@ def netloc_of(parts: urllib.parse.SplitResult) -> str:
 def normalize_prefix(path: str) -> str:
     path = posixpath.normpath(path or "/")
     return "/" if path in {".", "/"} else path.rstrip("/")
+
+
+def path_interpretations(url: str) -> list[str]:
+    """The raw path plus each successively percent-decoded, dot-resolved form."""
+    raw = urllib.parse.urlsplit(url).path or "/"
+    forms = [raw]
+    current = raw
+    for _ in range(3):
+        decoded = urllib.parse.unquote(current)
+        resolved = posixpath.normpath(decoded) if decoded else "/"
+        if decoded.endswith("/") and resolved != "/":
+            resolved += "/"
+        if not resolved.startswith("/"):
+            resolved = "/" + resolved
+        forms.append(resolved)
+        if decoded == current:
+            break
+        current = decoded
+    return forms
 
 
 def canonical(url: str) -> str:
@@ -163,9 +187,10 @@ class Crawler:
     def emit(self, *fields: str) -> None:
         print("\t".join(fields), flush=True)
 
-    def load_robots(self) -> None:
+    def load_robots(self) -> str | None:
+        """Load robots.txt. Returns a reason when the policy cannot be read."""
         if self.args.ignore_robots:
-            return
+            return None
         parts = urllib.parse.urlsplit(self.args.url)
         robots_url = f"{parts.scheme}://{parts.netloc}/robots.txt"
         parser = urllib.robotparser.RobotFileParser(robots_url)
@@ -173,9 +198,16 @@ class Crawler:
             request = urllib.request.Request(robots_url, headers={"User-Agent": self.args.user_agent})
             with self.opener(self.boundary.same_host).open(request, timeout=self.args.timeout) as response:
                 parser.parse(response.read().decode("utf-8", "replace").splitlines())
-        except (urllib.error.URLError, OutOfBoundary, OSError, ValueError):
-            parser.parse([])  # unreachable robots.txt: nothing is disallowed
+        except urllib.error.HTTPError as error:
+            if error.code not in (404, 410):
+                return f"robots.txt returned HTTP {error.code}"
+            parser.parse([])  # no robots.txt at all: nothing is disallowed
+        except OutOfBoundary as error:
+            return f"robots.txt redirected off-host to {error.target}"
+        except (urllib.error.URLError, OSError, ValueError) as error:
+            return f"robots.txt could not be fetched ({error})"
         self.robots = parser
+        return None
 
     def robots_allow(self, url: str) -> bool:
         return self.robots is None or self.robots.can_fetch(self.args.user_agent, url)
@@ -191,7 +223,13 @@ class Crawler:
         if not self.boundary.allows_page(start):
             self.emit("skip", "start-outside-boundary", start)
             return 2
-        self.load_robots()
+        unreadable = self.load_robots()
+        if unreadable:
+            # Fail closed: the confirmed plan says robots.txt governs the crawl.
+            self.emit("skip", f"robots-unreadable:{unreadable}", start)
+            print(f"crawl.py: {unreadable}; refusing to crawl. Pass --ignore-robots to proceed anyway.",
+                  file=sys.stderr)
+            return 3
         queue = collections.deque([(start, 0)])
         seen_pages = {start}
         seen_assets: set[str] = set()
