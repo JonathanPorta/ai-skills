@@ -97,7 +97,9 @@ instead.
 `make dev` serves the capture locally and `make stop` stops that server only; it
 never touches anything else listening on the port. A `forensic` pack's
 `serve/hosts.sh add` and `remove` manage one tagged `/etc/hosts` line, so your
-own mappings for the same hostname are left alone.
+own mappings for the same hostname are left alone. Recon edits are serialized
+with a lock, and if another program changes the file while the script runs, the
+script keeps that newer file and asks you to run it again.
 
 Scratch directories are meant to be temporary. Copy a pack somewhere permanent
 if you intend to keep it.

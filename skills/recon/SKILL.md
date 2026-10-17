@@ -533,7 +533,10 @@ chmod +x "$DEST/serve/hosts.sh"
 Every line it writes ends with `# recon:<pack-folder>`, and `remove` deletes
 only lines carrying that exact tag. Existing mappings for the same hostname
 survive both setup and teardown; `add` warns when one exists, because the first
-matching line in `/etc/hosts` wins.
+matching line in `/etc/hosts` wins. Every pack's `hosts.sh` takes the same lock
+beside the hosts file, so concurrent packs cannot overwrite each other, and an
+edit by another program while the script runs is kept: the script reports a
+conflict and changes nothing. A failed write leaves the file untouched.
 
 `serve/README.md` must honestly state limitations:
 

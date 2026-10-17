@@ -92,12 +92,20 @@ def normalize_prefix(path: str) -> str:
     return "/" if path in {".", "/"} else path.rstrip("/")
 
 
+MAX_DECODE_LAYERS = 32
+UNRESOLVABLE = "\0unresolvable"  # never inside a path prefix
+
+
 def path_interpretations(url: str) -> list[str]:
-    """The raw path plus each successively percent-decoded, dot-resolved form."""
+    """The raw path plus every percent-decoded, dot-resolved form until stable.
+
+    A server may keep decoding, so each layer is checked. A path still changing
+    after MAX_DECODE_LAYERS cannot be scoped and yields UNRESOLVABLE.
+    """
     raw = urllib.parse.urlsplit(url).path or "/"
     forms = [raw]
     current = raw
-    for _ in range(3):
+    for _ in range(MAX_DECODE_LAYERS):
         decoded = urllib.parse.unquote(current)
         resolved = posixpath.normpath(decoded) if decoded else "/"
         if decoded.endswith("/") and resolved != "/":
@@ -106,8 +114,9 @@ def path_interpretations(url: str) -> list[str]:
             resolved = "/" + resolved
         forms.append(resolved)
         if decoded == current:
-            break
+            return forms
         current = decoded
+    forms.append(UNRESOLVABLE)
     return forms
 
 

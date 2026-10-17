@@ -110,7 +110,12 @@ def effective_path(raw: str) -> str:
 
 
 def ps_can_report_start_times() -> bool:
-    result = subprocess.run(["ps", "-o", "lstart=", "-p", str(os.getpid())], capture_output=True, text=True)
+    """Whether `ps` may inspect processes here; some sandboxes forbid it outright."""
+    try:
+        result = subprocess.run(["ps", "-o", "lstart=", "-p", str(os.getpid())],
+                                capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
     return result.returncode == 0 and bool(result.stdout.strip())
 
 
@@ -172,6 +177,23 @@ class CrawlBoundaryTests(unittest.TestCase):
             "/menu/./../other",
         ]
         pages = {"/menu": page(*escapes, "/menu/ok"), "/menu/ok": page()}
+        with site(pages) as (base, requested):
+            result = crawl(base + "/menu", self.dest, "--no-assets")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        fetched = page_requests(requested)
+        self.assertIn("/menu/ok", fetched)
+        outside = [p for p in fetched if not (effective_path(p) == "/menu" or effective_path(p).startswith("/menu/"))]
+        self.assertEqual(outside, [], fetched)
+
+    def test_deeply_layered_encoding_cannot_escape_the_path_lock(self) -> None:
+        def layered(text: str, layers: int) -> str:
+            for _ in range(layers):
+                text = urllib.parse.quote(text, safe="")
+            return text
+        escapes = [f"/menu/{layered('..', n)}/other" for n in (4, 6, 10)]
+        escapes.append(f"/menu/{layered('../other', 5)}")
+        escapes.append("/menu/%" + "25" * 40 + "2e%" + "25" * 40 + "2e/other")  # beyond the decode limit
+        pages = {"/menu": page(*escapes, "/menu/%2Fstill-menu", "/menu/ok"), "/menu/ok": page()}
         with site(pages) as (base, requested):
             result = crawl(base + "/menu", self.dest, "--no-assets")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -291,8 +313,11 @@ class MakefileStopTests(unittest.TestCase):
         time.sleep(0.3)
         self.assertIsNone(same_command.poll(), "make stop trusted a recycled PID")
 
-    @unittest.skipUnless(ps_can_report_start_times(), "ps cannot report process start times here")
     def test_stop_stops_the_dev_server_it_started(self) -> None:
+        # Checked at run time, not import time, so a sandbox without `ps` can still
+        # load and run the rest of this file.
+        if not ps_can_report_start_times():
+            self.skipTest("ps cannot report process start times here")
         port = free_port()
         dev = self.start("make", "-s", "dev", f"PORT={port}", cwd=self.pack)
         wait_for_port(port)
@@ -400,6 +425,60 @@ class HostsScriptTests(unittest.TestCase):
         result = self.run_script("remove")
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.hosts.read_bytes(), with_line)
+
+    def make_script(self, tag: str) -> Path:
+        text = HOSTS_TEMPLATE.read_text(encoding="utf-8")
+        script = self.work / f"hosts-{tag}.sh"
+        script.write_text(text.replace("__HOST__", f"{tag}.test").replace("__TAG__", tag), encoding="utf-8")
+        return script
+
+    def shim_wrapping(self, command: str, before: str) -> dict:
+        """Run `before` (shell), then the real `command`, wherever the script calls it."""
+        real = shutil.which(command)
+        shims = self.work / "shims"
+        shims.mkdir(exist_ok=True)
+        fake = shims / command
+        fake.write_text(f'#!/bin/sh\n{before}\nexec {real} "$@"\n', encoding="utf-8")
+        fake.chmod(0o755)
+        return {"PATH": f"{shims}{os.pathsep}{os.environ['PATH']}"}
+
+    def test_concurrent_packs_keep_both_mappings(self) -> None:
+        first, second = self.make_script("pack-a"), self.make_script("pack-b")
+        slow = self.shim_wrapping("mv", "sleep 1")
+        env_first = dict(os.environ, HOSTS_FILE=str(self.hosts), **slow)
+        env_second = dict(os.environ, HOSTS_FILE=str(self.hosts))
+        racing = subprocess.Popen(["sh", str(first), "add"], env=env_first,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        time.sleep(0.3)  # the first pack now holds the lock and is about to replace the file
+        later = subprocess.run(["sh", str(second), "add"], env=env_second, capture_output=True, text=True, timeout=60)
+        _out, err = racing.communicate(timeout=60)
+        self.assertEqual(racing.returncode, 0, err)
+        self.assertEqual(later.returncode, 0, later.stderr)
+        text = self.hosts.read_text(encoding="utf-8")
+        self.assertIn("pack-a.test # recon:pack-a", text)
+        self.assertIn("pack-b.test # recon:pack-b", text)
+        self.assertTrue(text.startswith(self.original))
+
+    def test_in_place_edit_just_before_the_rename_is_kept(self) -> None:
+        self.run_script("add")
+        edit = f"printf '203.0.113.7 unrelated.test\\n' >> '{self.hosts}'"
+        result = self.run_with("remove", self.shim_wrapping("mv", edit))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("newer file was kept", result.stderr)
+        text = self.hosts.read_text(encoding="utf-8")
+        self.assertIn("203.0.113.7 unrelated.test", text)
+        self.assertIn("# recon:example.com-2026-10-17", text)
+        self.assertEqual(list(self.work.glob(".hosts.recon.*")), [])
+
+    def test_replacement_during_preparation_is_kept(self) -> None:
+        self.run_script("add")
+        real_cp, real_mv = shutil.which("cp"), shutil.which("mv")
+        replace = (f"{real_cp} '{self.hosts}' '{self.work}/swap' && printf '198.51.100.9 other.test\\n' >> "
+                   f"'{self.work}/swap' && {real_mv} '{self.work}/swap' '{self.hosts}'")
+        result = self.run_with("remove", self.shim_wrapping("cp", replace))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("newer file was kept", result.stderr)
+        self.assertIn("198.51.100.9 other.test", self.hosts.read_text(encoding="utf-8"))
 
     def test_symlinked_hosts_file_is_refused(self) -> None:
         link = self.work / "hosts-link"

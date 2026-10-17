@@ -28,28 +28,69 @@ has_tagged_line() {
   grep -qxF "$LINE" "$HOSTS_FILE"
 }
 
-# Rewrite the hosts file for `add` or `remove` without ever truncating it.
+tmp=""
+orig=""
+LOCK_DIR="$(dirname -- "$HOSTS_FILE")/.hosts.recon.lock"
+cleanup() {
+  [ -n "$tmp" ] && rm -f "$tmp"
+  [ -n "$orig" ] && rm -f "$orig"
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+}
+
+# Serialize recon edits: every pack's hosts.sh takes the same lock directory
+# beside the hosts file, so two packs cannot overwrite each other's changes.
+take_lock() {
+  tries=0
+  until mkdir "$LOCK_DIR" 2>/dev/null; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 100 ] || die "another recon hosts edit holds $LOCK_DIR, so nothing was changed. If no hosts.sh is running, remove that directory and retry."
+    sleep 0.1
+  done
+  trap cleanup EXIT INT TERM
+}
+
+# Rewrite the hosts file for `add` or `remove` without ever truncating it, and
+# without overwriting anything another program changed while this ran.
+#
+# A hard link pins the original file. The new copy is built from that pinned
+# original, then renamed into place. Afterwards the pinned original is checked:
+# an in-place edit made at any point before the rename landed in it, and is put
+# back. A program that itself replaces the file by rename in the instant between
+# the identity check and our rename cannot be detected from a shell script.
 replace_hosts() {
   [ -L "$HOSTS_FILE" ] && die "$HOSTS_FILE is a symlink; point HOSTS_FILE at its target. Nothing was changed."
   dir="$(dirname -- "$HOSTS_FILE")"
   unchanged="$HOSTS_FILE is unchanged"
+  newer="$HOSTS_FILE changed while this edit was being prepared, so the newer file was kept. Run the command again."
+  orig="$(mktemp "$dir/.hosts.recon.orig.XXXXXX")" || die "cannot create a temporary file in $dir; $unchanged."
+  rm -f "$orig"
+  ln "$HOSTS_FILE" "$orig" || { orig=""; die "cannot pin $HOSTS_FILE with a hard link; $unchanged."; }
+  before="$(cksum < "$orig")" || die "cannot read $HOSTS_FILE; $unchanged."
   tmp="$(mktemp "$dir/.hosts.recon.XXXXXX")" || die "cannot create a temporary file in $dir; $unchanged."
-  trap 'rm -f "$tmp"' EXIT INT TERM
-  cp -p "$HOSTS_FILE" "$tmp" || die "cannot copy $HOSTS_FILE; $unchanged."
+  cp -p "$orig" "$tmp" || die "cannot copy $HOSTS_FILE; $unchanged."
   if [ "$1" = add ]; then
-    { awk 1 "$HOSTS_FILE" && printf '%s\n' "$LINE"; } > "$tmp" || die "cannot write the new file; $unchanged."
+    { awk 1 "$orig" && printf '%s\n' "$LINE"; } > "$tmp" || die "cannot write the new file; $unchanged."
   else
     status=0
-    grep -vxF "$LINE" "$HOSTS_FILE" > "$tmp" || status=$?
+    grep -vxF "$LINE" "$orig" > "$tmp" || status=$?
     [ "$status" -le 1 ] || die "cannot read $HOSTS_FILE; $unchanged."
   fi
+  # Replaced by another program while the copy was built: keep its version.
+  [ "$HOSTS_FILE" -ef "$orig" ] || die "$newer"
   mv -f "$tmp" "$HOSTS_FILE" || die "cannot replace $HOSTS_FILE; $unchanged. Remove the line ending in '$TAG' by hand."
-  trap - EXIT INT TERM
+  tmp=""
+  # Edited in place before the rename: that edit is in the pinned original, so
+  # restore it rather than lose it.
+  if [ "$(cksum < "$orig")" != "$before" ]; then
+    mv -f "$orig" "$HOSTS_FILE" && orig=""
+    die "$newer"
+  fi
   if command -v restorecon >/dev/null 2>&1; then restorecon "$HOSTS_FILE" 2>/dev/null || true; fi
 }
 
 case "${1:-}" in
   add)
+    take_lock
     if has_tagged_line; then
       echo "Already present: $LINE"
       exit 0
@@ -61,6 +102,7 @@ case "${1:-}" in
     echo "Added: $LINE"
     ;;
   remove)
+    take_lock
     if ! has_tagged_line; then
       echo "Nothing to remove for $HOST."
       exit 0

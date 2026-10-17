@@ -61,6 +61,21 @@ The re-review confirmed the ordinary cases and found the remaining edges:
   byte-for-byte. `make dev` records the server's start time and runs it with this
   pack's absolute `--directory`; `make stop` signals the PID only when both match.
 
+## Review round 3
+
+- **F1:** a fourth layer of percent-encoding (`%2525252e`) passed the
+  three-pass decode. The crawler now decodes until the path is stable, checking
+  every layer, and rejects a path still changing after 32 layers.
+- **F2:** two `hosts.sh` runs, or any other edit landing just before the rename,
+  were last-writer-wins. Recon edits now take a lock directory beside the hosts
+  file. The original is pinned with a hard link and the copy is built from it;
+  the rename is refused if the file was replaced, and an in-place edit made
+  before the rename is restored afterwards. A program that replaces the file by
+  rename in the instant between the identity check and the rename remains
+  undetectable from a shell script.
+- The test file no longer probes `ps` at import time, so it loads where `ps` is
+  forbidden; the one test that needs `ps` skips itself there.
+
 ## Out of scope (follow-up)
 
 - Making `AI_SCRATCH_ROOT` and `~/.ai-scratch/config` the shared scratch
@@ -74,7 +89,9 @@ The re-review confirmed the ordinary cases and found the remaining edges:
 | 1 | `cmp` of the installed and committed `SKILL.md` reports no difference. |
 | 2–4 | See the diff. |
 | 3 | All four icons rendered side by side for review. |
-| 5 | `make check`: 4 skills validated, 135 tests passed, 1 skipped. |
+| 5 | `make check`: 4 skills validated, 139 tests passed, 1 skipped. |
+| F1 (round 3) | `tests/test_recon.py`: escapes with 4, 6, and 10 encoding layers and one beyond the 32-layer limit are never requested from a `/menu` crawl; the previous crawler admitted the 4-layer case. |
+| F2 (round 3) | `tests/test_recon.py`: two packs adding concurrently keep both mappings; an in-place edit just before the rename survives and the script reports the conflict; a replacement during preparation survives. The previous `hosts.sh` reported success while losing the in-place edit. |
 | F1 (round 2) | `tests/test_recon.py`: six encoded and dot-segment escapes from `/menu` are never requested; `robots.txt` returning 401, 403, 500, 503, or dropping the connection exits 3 with no page request; 404/410 proceed; `--ignore-robots` overrides. |
 | F2 (round 2) | `tests/test_recon.py`: with `mv`, `cp`, or `awk` failing, `add` and `remove` leave the hosts file byte-identical with no temporary file left; an unwritable directory and a symlinked hosts file are refused unchanged; a stale PID file naming an identical `http.server` for the same pack is not trusted. The previous `hosts.sh` was confirmed to leave only `BROKEN` when its write failed. |
 | F1 | `tests/test_recon.py`: `--max-pages 1` requests exactly one page on a four-page site; a `/menu` crawl never requests `/other` or `/menu-old`; out-of-boundary redirects, robots.txt, depth, and off-host links are all refused before the request. |
