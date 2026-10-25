@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,35 @@ OPEN_DESIGN_COMMIT = "fe1231eed69a2312e56c4e155e06781981fff068"
 
 
 class OpenDesignIntegrationTests(unittest.TestCase):
+    def test_independently_copied_skills_include_renderer_and_package_guide(self) -> None:
+        """Exercise portable copies without relying on repository sibling imports."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for kind, source in (("checkpoint", CHECKPOINT_DIR), ("handoff", HANDOFF_DIR)):
+                with self.subTest(kind=kind):
+                    installed = root / kind / "installed-skill"
+                    shutil.copytree(source, installed)
+                    project = root / kind / "project"
+                    project.mkdir()
+                    preview = b'<!doctype html><title>Original preview</title><a href="index.html">Home</a>'
+                    (project / "index.html").write_bytes(preview)
+                    (project / "README.md").write_text("Original source README\n", encoding="utf-8")
+                    command = [sys.executable, str(installed / "scripts" / f"package_{kind}.py"),
+                               str(project), "--project-name", "Standalone Design",
+                               "--primary", "index.html", "Original website preview"]
+                    command += ["--change" if kind == "checkpoint" else "--bump-reason",
+                                "Verify independently staged package guide"]
+                    result = subprocess.run(command, cwd=root, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    archives = list(project.glob("*.zip"))
+                    self.assertEqual(len(archives), 1)
+                    with zipfile.ZipFile(archives[0]) as archive:
+                        self.assertEqual(archive.read("project/index.html"), preview)
+                        self.assertTrue(archive.read("README.md").startswith(b"Open `index.html` first."))
+                        self.assertIn(b"project/index.html", archive.read("index.html"))
+                        self.assertIn("artifact-manifest.json", archive.namelist())
+                        self.assertIn("_package/verification.json", archive.namelist())
+
     @unittest.skipUnless(os.environ.get("OPEN_DESIGN_REPO"), "OPEN_DESIGN_REPO is not set")
     def test_production_plugin_loader_injects_and_stages_both_helpers(self) -> None:
         open_design = Path(os.environ["OPEN_DESIGN_REPO"]).resolve()
@@ -166,7 +196,7 @@ main().catch((error) => {{
             for plugin_id, (skill_dir, helper_path, body_heading) in expected.items():
                 with self.subTest(plugin_id=plugin_id):
                     record = records[plugin_id]
-                    self.assertEqual(record["version"], "0.1.0")
+                    self.assertEqual(record["version"], "0.2.0")
                     self.assertEqual(record["kind"], "scenario")
                     self.assertEqual(record["capabilities"], ["prompt:inject"])
                     self.assertEqual(record["appliedCapabilities"], ["prompt:inject"])
@@ -180,6 +210,7 @@ main().catch((error) => {{
                     staged_path = Path(record["stagedPath"])
                     self.assertTrue(staged_path.is_relative_to(project / ".od-skills"))
                     self.assertTrue((staged_path / helper_path).is_file())
+                    self.assertTrue((staged_path / "scripts/package_index.py").is_file())
 
             checkpoint_helper = (
                 Path(records["package-design-checkpoint"]["stagedPath"])
@@ -211,7 +242,9 @@ main().catch((error) => {{
                 names = set(archive.namelist())
                 self.assertIn("index.html", names)
                 self.assertIn("_checkpoint/CHANGELOG.md", names)
-                self.assertFalse(any(name.startswith(".od-skills/") for name in names))
+                self.assertIn("project/primary.html", names)
+                self.assertIn("artifact-manifest.json", names)
+                self.assertFalse(any(".od-skills/" in name for name in names))
 
             handoff_helper = (
                 Path(records["package-design-handoff"]["stagedPath"])
@@ -225,6 +258,9 @@ main().catch((error) => {{
                     str(project),
                     "--project-name",
                     "Open Design Contract",
+                    "--primary",
+                    "primary.html",
+                    "Accepted primary design",
                     "--bump-reason",
                     "Verify plugin-local final-handoff loading and staging",
                 ],
@@ -236,8 +272,10 @@ main().catch((error) => {{
             with zipfile.ZipFile(project / "open-design-contract-0.1.0.zip") as archive:
                 names = set(archive.namelist())
                 self.assertIn("_handoff/MANIFEST.json", names)
-                self.assertNotIn(checkpoint_zip.name, names)
-                self.assertFalse(any(name.startswith(".od-skills/") for name in names))
+                self.assertIn("index.html", names)
+                self.assertIn("project/primary.html", names)
+                self.assertNotIn("project/" + checkpoint_zip.name, names)
+                self.assertFalse(any(".od-skills/" in name for name in names))
 
 
 if __name__ == "__main__":

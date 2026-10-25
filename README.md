@@ -9,8 +9,8 @@ additive plugin sidecar stay beside the portable `SKILL.md` they describe.
 | Skill | Use it for | Open Design | OpenAI ChatGPT / Codex | Other Agent Skills harnesses |
 |---|---|---|---|---|
 | [`inspect-opendesign`](skills/inspect-opendesign/) | Inspect local projects and runs, find versioned handoff/checkpoint ZIPs, and retrieve existing artifacts from an external agent. | API 0.25.0 source-checked; local HTTP fixtures tested | Format-compatible; live desktop use not yet verified | Format-compatible; not yet verified |
-| [`package-design-checkpoint`](skills/package-design-checkpoint/) | Freeze an interim design state for review, comparison, or later resumption with a root index and concise changelog. | First-class GitHub plugin; current runtime contract-tested at `fe1231e…` | Format-compatible; helper tested, direct harness not yet verified | Format-compatible; not yet verified |
-| [`package-design-handoff`](skills/package-design-handoff/) | Deliver an accepted, complete, implementation-ready design package with manifest, checksums, and provenance. | First-class GitHub plugin; current runtime contract-tested at `fe1231e…` | Verified | Format-compatible; not yet verified |
+| [`package-design-checkpoint`](skills/package-design-checkpoint/) | Freeze interim work with an offline root guide, review context, and concise changelog. | First-class GitHub plugin; 0.2.0 desktop update check pending | Format-compatible; helper tested, direct harness not yet verified | Format-compatible; not yet verified |
+| [`package-design-handoff`](skills/package-design-handoff/) | Deliver accepted work with an offline root guide, source tree, manifest, checksums, and provenance. | First-class GitHub plugin; 0.2.0 desktop update check pending | Helper tested; 0.2.0 direct harness check pending | Format-compatible; not yet verified |
 | [`ai-scratch`](skills/ai-scratch/) | Keep review clones and generated files in one designated scratch directory, and reclaim its disk through a confirm-first cleanup. | Format-compatible; not yet verified | Format-compatible; not yet verified | Verified with Claude Code |
 | [`recon`](skills/recon/) | Capture a public website as a research pack, from a one-page gist to a Docker-replayable forensic snapshot. | Format-compatible; not yet verified | Format-compatible; not yet verified | Verified with Claude Code (`gist` tier) |
 
@@ -31,14 +31,24 @@ Compatibility labels are conservative:
 | Archive filename | `<slug>-checkpoint-X.Y.Z.zip` | `<slug>-X.Y.Z.zip` |
 | Version stream | Independent; patch by default | Independent; scope-sensitive patch/minor/major |
 | Payload emphasis | Current mockups, prototypes, states, alternatives, nonvisual design artifacts, required local assets | Complete shippable sources, exports, specs, implementation notes, and provenance |
-| Navigation | Required root `index.html` or `index.md`; one primary plus functionally labeled alternatives | No checkpoint-style launcher inventory required |
-| Generated metadata | Concise `_checkpoint/CHANGELOG.md` only | `_handoff/README.md`, manifest, and per-file checksums |
+| Navigation | Always root `index.html`; one primary plus described review targets | Same canonical guide with handoff lifecycle and implementation context |
+| Authored files | Preserved under `project/`, including original index and README | Same byte-preserved source subtree |
+| Shared guide metadata | Root README and `artifact-manifest.json`, plus `_package/verification.json` | Same navigation metadata and packaging report |
+| Type-specific metadata | Concise `_checkpoint/CHANGELOG.md` | `_handoff/README.md`, manifest, and per-file checksums |
 | Final ZIP SHA-256 | Optional | Required |
 | Claim | Explicitly nonfinal | Complete final delivery |
 
 The slash forms in this table are human shorthand, not Open Design slash
 commands. In Open Design, install and apply the corresponding plugin from the
 Plugins UI.
+
+Both 0.2.0 packaging skills generate the same eight-section human entrypoint:
+identity, start here, changes, review, decisions/blockers, package map,
+verification, and documentation. Supply review context through
+[`--package-metadata`](skills/package-design-checkpoint/references/package-metadata.md).
+The original source lives intact under `project/`; the archive root is a guide,
+not a deployment directory. This replaces the previous root-overlay layout.
+Existing archive version streams and published ZIPs remain unchanged.
 
 ## Repository layout
 

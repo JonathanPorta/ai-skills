@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import fnmatch
 import hashlib
-import html
-from html.parser import HTMLParser
+import importlib.util
+import json
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -18,10 +18,23 @@ import stat
 import sys
 import tempfile
 import unicodedata
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import quote
 import zipfile
 
 
+def load_index_module():
+    """Load the bundled renderer independently of the caller's sys.path."""
+    path = Path(__file__).with_name("package_index.py")
+    spec = importlib.util.spec_from_file_location("checkpoint_package_index", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load package index renderer: {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+PACKAGE_INDEX = load_index_module()
 METADATA_DIR = "_checkpoint"
 CHANGELOG_PATH = f"{METADATA_DIR}/CHANGELOG.md"
 IGNORE_CONTROL_FILE = ".opendesign-checkpointignore"
@@ -278,6 +291,10 @@ class PayloadFile:
     sha256: str
     mode: int
 
+    @property
+    def source_path(self) -> str:
+        return self.absolute_path.relative_to(self.source_root).as_posix()
+
 
 @dataclass(frozen=True)
 class CheckpointTarget:
@@ -285,42 +302,6 @@ class CheckpointTarget:
     label: str
     primary: bool = False
 
-
-class IndexHTMLParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.targets: list[str] = []
-        self.links: list[tuple[str, str]] = []
-        self._anchors: list[tuple[str, list[str], str]] = []
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        normalized_attrs = {
-            name.casefold(): value for name, value in attrs if value is not None
-        }
-        for name, value in normalized_attrs.items():
-            if name in {"href", "src", "poster", "data", "action", "formaction"} and value:
-                self.targets.append(value)
-            elif name == "srcset" and value:
-                for candidate in value.split(","):
-                    url = candidate.strip().split(maxsplit=1)[0]
-                    if url:
-                        self.targets.append(url)
-
-        if tag.casefold() == "a" and normalized_attrs.get("href"):
-            fallback_label = normalized_attrs.get("aria-label") or normalized_attrs.get("title") or ""
-            self._anchors.append((normalized_attrs["href"], [], fallback_label))
-        elif self._anchors and normalized_attrs.get("alt"):
-            self._anchors[-1][1].append(normalized_attrs["alt"])
-
-    def handle_data(self, data: str) -> None:
-        if self._anchors:
-            self._anchors[-1][1].append(data)
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag.casefold() == "a" and self._anchors:
-            href, text_parts, fallback_label = self._anchors.pop()
-            visible_label = " ".join("".join(text_parts).split())
-            self.links.append((href, visible_label or " ".join(fallback_label.split())))
 
 
 def slugify(project_name: str) -> str:
@@ -785,7 +766,7 @@ def inventory_payload(
                 PayloadFile(
                     source_root=source,
                     absolute_path=path,
-                    archive_path=relative,
+                    archive_path=f"project/{relative}",
                     size=file_stat.st_size,
                     sha256=digest,
                     mode=stat.S_IMODE(file_stat.st_mode),
@@ -803,9 +784,8 @@ def inventory_payload(
     if not payload:
         raise ValueError("project contains no checkpoint files after exclusions")
     names = [item.archive_path for item in payload]
-    if index_name not in names:
-        names.append(index_name)
-    names.append(CHANGELOG_PATH)
+    names.extend(["index.html", "README.md", "artifact-manifest.json",
+                  "_package/verification.json", CHANGELOG_PATH])
     validate_portable_namespace(names)
     return payload, sorted(set(automatically_excluded))
 
@@ -913,24 +893,16 @@ def build_targets(
             raise ValueError(f"duplicate target in checkpoint inventory: '{target}'")
         if label.casefold() in seen_labels:
             raise ValueError(f"duplicate functional label in checkpoint inventory: '{label}'")
-        if target == index_name:
-            raise ValueError("the root launcher index cannot also be a declared checkpoint target")
         if target not in payload_names:
             raise ValueError(f"declared checkpoint target does not exist in payload: '{target}'")
         seen_paths.add(target_key)
         seen_labels.add(label.casefold())
         targets.append(CheckpointTarget(path=target, label=label, primary=primary))
 
-    html_targets = [
-        target
-        for target in targets
-        if PurePosixPath(target.path).suffix.casefold() in {".html", ".htm"}
-    ]
     undeclared_html = sorted(
         path
         for path in payload_names
-        if path != index_name
-        and PurePosixPath(path).suffix.casefold() in {".html", ".htm"}
+        if PurePosixPath(path).suffix.casefold() in {".html", ".htm"}
         and portable_archive_key(path) not in seen_paths
     )
     if undeclared_html:
@@ -938,166 +910,7 @@ def build_targets(
             "every browsable HTML mockup must be declared as the primary or an alternative; "
             f"declare or exactly exclude: {', '.join(undeclared_html)}"
         )
-    if len(html_targets) >= 2 and index_name != "index.html":
-        raise ValueError("multiple browsable HTML mockups require root index.html")
     return targets
-
-
-def generated_index_bytes(
-    index_name: str,
-    project_name: str,
-    namespace: str | None,
-    targets: list[CheckpointTarget],
-) -> bytes:
-    primary = targets[0]
-    alternatives = targets[1:]
-    if index_name == "index.html":
-        def html_target(value: str) -> str:
-            return html.escape(quote(value, safe="/-._~"), quote=True)
-
-        rows = []
-        for target in alternatives:
-            rows.append(
-                "      <li><a href=\"{}\">{}</a></li>".format(
-                    html_target(target.path), html.escape(target.label)
-                )
-            )
-        alternatives_html = (
-            "\n    <section>\n      <h2>Alternatives</h2>\n      <ul>\n"
-            + "\n".join(rows)
-            + "\n      </ul>\n    </section>"
-            if rows
-            else ""
-        )
-        namespace_html = (
-            f"\n    <p><strong>Namespace:</strong> {html.escape(namespace)}</p>"
-            if namespace
-            else ""
-        )
-        document = f"""<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{html.escape(project_name)} design checkpoint</title>
-  </head>
-  <body>
-    <main>
-      <h1>{html.escape(project_name)} design checkpoint</h1>{namespace_html}
-      <section>
-        <h2>Primary</h2>
-        <p><a href="{html_target(primary.path)}">{html.escape(primary.label)}</a></p>
-      </section>{alternatives_html}
-    </main>
-  </body>
-</html>
-"""
-        return document.encode("utf-8")
-
-    namespace_line = f"\nNamespace: `{namespace}`\n" if namespace else ""
-    rows = "\n".join(
-        f"- [{markdown_label(target.label)}]({markdown_target(target.path)})"
-        for target in alternatives
-    )
-    alternatives_md = f"\n\n## Alternatives\n\n{rows}" if rows else ""
-    document = (
-        f"# {project_name} design checkpoint\n"
-        f"{namespace_line}\n"
-        f"## Primary\n\n[{markdown_label(primary.label)}]({markdown_target(primary.path)})"
-        f"{alternatives_md}\n"
-    )
-    return document.encode("utf-8")
-
-
-def extract_index_references(
-    index_name: str, text: str
-) -> tuple[list[str], list[tuple[str, str]]]:
-    if index_name == "index.html":
-        parser = IndexHTMLParser()
-        parser.feed(text)
-        parser.close()
-        return parser.targets, parser.links
-    matches = list(re.finditer(r"(!?)\[((?:\\.|[^\]])*)\]\(([^)]+)\)", text))
-    targets = [match.group(3).strip() for match in matches]
-    links = [
-        (match.group(3).strip(), match.group(2))
-        for match in matches
-        if match.group(1) != "!"
-    ]
-    return targets, links
-
-
-def local_index_target(raw_value: str) -> str | None:
-    value = html.unescape(raw_value).strip()
-    if not value or value.startswith("#"):
-        return None
-    if any(ord(character) < 32 or ord(character) == 127 for character in value):
-        raise ValueError(f"unsafe index target contains a control character: '{raw_value}'")
-    parsed = urlsplit(value)
-    scheme = parsed.scheme.casefold()
-    if scheme in {"http", "https", "mailto"}:
-        return None
-    if parsed.netloc:
-        return None
-    if scheme:
-        raise ValueError(f"unsafe index target uses an unsupported URL scheme: '{raw_value}'")
-    # URL consumers decode one layer. Repeated decoding would turn a literal
-    # filename such as `primary%20state.html` into `primary state.html` after
-    # the generator correctly emits `%2520` for the percent sign.
-    path_value = unquote(parsed.path)
-    if not path_value:
-        return None
-    if "\\" in path_value or path_value.startswith("/") or re.match(r"^[A-Za-z]:", path_value):
-        raise ValueError(f"unsafe index target is not project-relative: '{raw_value}'")
-    if "//" in path_value:
-        raise ValueError(f"unsafe index target has an empty path component: '{raw_value}'")
-    path = PurePosixPath(path_value)
-    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-        raise ValueError(f"unsafe index target escapes the checkpoint root: '{raw_value}'")
-    normalized = path.as_posix()
-    portable_archive_key(normalized)
-    if path_value.endswith("/"):
-        normalized += "/index.html"
-    return normalized
-
-
-def validate_index_document(
-    index_name: str,
-    index_data: bytes,
-    archive_names: set[str],
-    targets: list[CheckpointTarget],
-) -> None:
-    try:
-        text = index_data.decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise ValueError(f"root {index_name} must be UTF-8") from error
-    raw_urls, raw_links = extract_index_references(index_name, text)
-    local_targets: list[str] = []
-    for raw_url in raw_urls:
-        target = local_index_target(raw_url)
-        if target is None:
-            continue
-        if target not in archive_names:
-            raise ValueError(f"index target does not exist in checkpoint ZIP: '{target}'")
-        local_targets.append(target)
-    labeled_local_targets: list[tuple[str, str]] = []
-    for raw_url, raw_label in raw_links:
-        target = local_index_target(raw_url)
-        if target is None:
-            continue
-        label = re.sub(r"\\([\\\[\]])", r"\1", html.unescape(raw_label))
-        labeled_local_targets.append((target, " ".join(label.split())))
-    for target in targets:
-        if target.path not in local_targets:
-            raise ValueError(f"root {index_name} does not link declared target '{target.path}'")
-        if not any(
-            path == target.path and label.casefold() == target.label.casefold()
-            for path, label in labeled_local_targets
-        ):
-            raise ValueError(
-                f"root {index_name} does not functionally label its link to "
-                f"'{target.path}' as '{target.label}'"
-            )
 
 
 def changelog_bytes(
@@ -1108,12 +921,13 @@ def changelog_bytes(
     bump_type: str,
     change: str,
     targets: list[CheckpointTarget],
+    created_at: str | None = None,
 ) -> bytes:
-    generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    generated_at = created_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     primary = targets[0]
     alternatives = targets[1:]
     lines = [
-        f"# {project_name} design checkpoint",
+        f"# {project_name} — CHECKPOINT {version}",
         "",
         f"- Project: `{project_name}`",
         f"- Namespace: `{namespace if namespace else 'none'}`",
@@ -1122,12 +936,12 @@ def changelog_bytes(
         f"- Version change: `{bump_type}`",
         f"- Created: `{generated_at}`",
         f"- Change: {change}",
-        f"- Primary: [{markdown_label(primary.label)}](../{markdown_target(primary.path)})",
+        f"- Primary: [{markdown_label(primary.label)}](../project/{markdown_target(primary.path)})",
     ]
     if alternatives:
         lines.extend(["", "## Alternatives", ""])
         lines.extend(
-            f"- [{markdown_label(target.label)}](../{markdown_target(target.path)})"
+            f"- [{markdown_label(target.label)}](../project/{markdown_target(target.path)})"
             for target in alternatives
         )
     return ("\n".join(lines) + "\n").encode("utf-8")
@@ -1179,8 +993,9 @@ def validate_zip(
         for name, expected_data in generated.items():
             if archive.read(name) != expected_data:
                 raise ValueError(f"generated checkpoint metadata changed for '{name}'")
-        index_data = archive.read(index_name)
-        validate_index_document(index_name, index_data, actual_names, targets)
+        PACKAGE_INDEX.validate_index(
+            {name: archive.read(name) for name in generated}, actual_names
+        )
         forbidden = {
             "_checkpoint/MANIFEST.json",
             "_checkpoint/CHECKSUMS.sha256",
@@ -1211,7 +1026,7 @@ def build_zip(
                     archive.writestr(zip_info(archive_name), generated[archive_name])
                     continue
                 item = payload_by_name[archive_name]
-                with open_project_file(item.source_root, item.archive_path) as source_handle:
+                with open_project_file(item.source_root, item.source_path) as source_handle:
                     with archive.open(zip_info(item.archive_path, item.mode), "w") as zip_handle:
                         shutil.copyfileobj(source_handle, zip_handle, length=1024 * 1024)
 
@@ -1244,16 +1059,19 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--index",
-        required=True,
+        default="index.html",
         choices=("index.html", "index.md"),
-        help="Required root launcher index",
+        help="Canonical root index (index.html); index.md is no longer supported",
+    )
+    parser.add_argument(
+        "--package-metadata",
+        help="Optional JSON package-guide metadata; paths are source-relative",
     )
     parser.add_argument(
         "--primary",
-        required=True,
         nargs=2,
         metavar=("TARGET", "LABEL"),
-        help="Primary target path and functional label",
+        help="Primary target path and functional label; may instead be supplied in package metadata",
     )
     parser.add_argument(
         "--alternative",
@@ -1303,6 +1121,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
+        if args.index != "index.html":
+            raise ValueError("all packages now use root index.html; remove --index index.md and declare the Markdown file as a review target")
+        metadata = PACKAGE_INDEX.load_metadata(args.package_metadata)
         source = Path(args.source).expanduser().resolve(strict=True)
         if not source.is_dir():
             raise ValueError(f"source is not a directory: {source}")
@@ -1340,51 +1161,40 @@ def main() -> int:
             args.index,
             ignore_patterns,
         )
-        payload_names = {item.archive_path for item in payload}
+        payload_names = {item.source_path for item in payload}
+        created_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        generated = PACKAGE_INDEX.build_index(
+            project_name=project_name,
+            slug=slug,
+            artifact_type="checkpoint",
+            version=str(version),
+            change=change,
+            payload_paths=sorted(payload_names),
+            primary={"path": args.primary[0], "label": args.primary[1]} if args.primary else None,
+            review_targets=[{"path": values[0], "label": values[1]} for values in args.alternative],
+            metadata=metadata,
+            namespace=namespace,
+            created_at=created_at,
+            docs=[{"path": CHANGELOG_PATH, "label": "Checkpoint changelog",
+                   "description": "Current version, change summary, and declared review targets."}],
+        )
+        # The renderer is the single metadata merge point. Validate the final
+        # labels and exhaustive HTML inventory, then reuse those exact labels
+        # in the changelog and dry-run plan so they cannot drift from the guide.
+        guide = json.loads(generated["artifact-manifest.json"])
+        primary = guide["primary"]
         targets = build_targets(
-            list(args.primary),
-            [list(values) for values in args.alternative],
-            payload_names,
-            args.index,
+            [primary["path"].removeprefix("project/"), primary["label"]],
+            [[target["path"].removeprefix("project/"), target["label"]]
+             for target in guide["review_targets"]],
+            payload_names, args.index,
         )
-
-        generated: dict[str, bytes] = {}
-        existing_index = next(
-            (item for item in payload if item.archive_path == args.index),
-            None,
-        )
-        if existing_index is None:
-            generated[args.index] = generated_index_bytes(
-                args.index,
-                project_name,
-                namespace,
-                targets,
-            )
-        else:
-            with open_project_file(source, args.index) as handle:
-                existing_index_data = handle.read()
-            validate_index_document(
-                args.index,
-                existing_index_data,
-                payload_names | {CHANGELOG_PATH},
-                targets,
-            )
         generated[CHANGELOG_PATH] = changelog_bytes(
-            project_name,
-            namespace,
-            version,
-            previous,
-            bump_type,
-            change,
-            targets,
+            project_name, namespace, version, previous, bump_type, change, targets, created_at,
         )
-        final_names = payload_names | set(generated)
-        if args.index in generated:
-            index_data = generated[args.index]
-        else:
-            with open_project_file(source, args.index) as handle:
-                index_data = handle.read()
-        validate_index_document(args.index, index_data, final_names, targets)
+        final_names = {item.archive_path for item in payload} | set(generated)
+        validate_portable_namespace(sorted(final_names))
+        PACKAGE_INDEX.validate_index(generated, final_names)
 
         all_exclusions = sorted(set(ignore_patterns + automatic_exclusions))
         plan = {
@@ -1406,8 +1216,6 @@ def main() -> int:
             "exclusions": all_exclusions,
         }
         if args.dry_run:
-            import json
-
             print(json.dumps(plan, indent=2, sort_keys=True))
             return 0
 

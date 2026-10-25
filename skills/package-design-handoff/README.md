@@ -22,6 +22,8 @@ The handoff skill:
   recognized checkpoint ZIPs;
 - fails closed on credential-like files unless an exact path is reviewed;
 - rejects symlinks and nonportable or colliding ZIP entry names;
+- generates an offline root `index.html` guide and README from package metadata;
+- preserves the authored tree, including its original index, under `project/`;
 - adds `_handoff/README.md`, `_handoff/MANIFEST.json`, and
   `_handoff/CHECKSUMS.sha256`; and
 - validates and fsyncs a private archive before atomic no-clobber publication.
@@ -160,6 +162,8 @@ be packaged as a final implementation handoff.
 python3 "$AI_SKILLS_REPO/skills/package-design-handoff/scripts/package_handoff.py" \
   /absolute/path/to/project \
   --project-name "Human Project Name" \
+  --primary index.html "Accepted responsive website" \
+  --package-metadata /absolute/path/outside/project/package-metadata.json \
   --bump patch \
   --bump-reason "Corrected responsive states and completed icon exports"
 ```
@@ -168,3 +172,35 @@ Run the helper with `--help` for explicit-version, output-directory, and custom
 exclusion options. Credential-like files require either an exact `--exclude`
 path or a deliberately reviewed exact `--include-sensitive` path; globs do not
 count as credential review.
+
+Supply one primary target through `--primary TARGET LABEL` or metadata. Describe
+the review workflow and delivery posture with the
+[metadata contract and example](references/package-metadata.md). All input paths
+are source-relative, without the generated `project/` prefix.
+
+## Canonical package guide and 0.2.0 migration
+
+Every handoff has root `index.html`, `README.md`, `artifact-manifest.json`, and
+`_package/verification.json` alongside the existing `_handoff/` metadata. The
+guide presents identity, a primary preview, changes, review steps, current
+decisions/blockers, an annotated package map, verification, and documentation.
+README begins by pointing to `index.html`. The guide is responsive and offline;
+it requires no scripts, fonts, or other network resources.
+
+Version 0.2.0 preserves the complete authored tree under `project/`. Existing
+source index/README bytes and relative links stay intact. This changes the old
+archive-root overlay contract: copy only `project/` when reconstructing the source,
+and deploy only the precise subtree explicitly approved in the guide. Do not
+deploy the packaging root. Choose a minor package bump when migrating a pre-1.0
+archive series; the skill version does not reset or rename existing archives.
+
+An accepted handoff is not automatic deployment authorization. Deployment defaults
+to review-only until explicitly supplied. Project test status defaults to not-run;
+reported pass/fail must link to included evidence. Package integrity checks are
+reported separately and do not claim to have run the project's test suite.
+
+After release, re-import both packaging plugins in OpenDesign, confirm version
+0.2.0, apply each to a disposable project, and produce a smoke-test archive.
+Verify the root guide, source preview, README, links, and lifecycle distinctions.
+The repository's staged-plugin fixture covers the new companion renderer; actual
+desktop reinstallation remains a post-release check on the local host.

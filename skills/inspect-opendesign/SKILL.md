@@ -92,7 +92,7 @@ or the independent checkpoint and handoff version streams.
 | Filename candidate | Meaning | Metadata after download |
 |---|---|---|
 | `<slug>-X.Y.Z.zip` or legacy `<slug>-vX.Y.Z.zip` | Handoff candidate | `_handoff/README.md`, `_handoff/MANIFEST.json`, `_handoff/CHECKSUMS.sha256` |
-| `<slug>-checkpoint-X.Y.Z.zip` | Nonfinal checkpoint candidate | `_checkpoint/CHANGELOG.md`; root `index.html` or `index.md` per its packaging contract |
+| `<slug>-checkpoint-X.Y.Z.zip` | Nonfinal checkpoint candidate | `_checkpoint/CHANGELOG.md`; root `index.html` in packager 0.2.0+, with legacy `index.md` possible in older archives |
 | Other `.zip` | Unclassified archive | Inspect before claiming a package type |
 
 Treat `classification: filename` as a guess. Download classification uses ZIP
@@ -100,7 +100,10 @@ metadata markers; mixed or absent markers stay unclassified. A readable ZIP and
 those markers do not establish CRC integrity, manifest checksums, accepted design
 quality, or completeness. If validation is requested, inspect its changelog or
 manifest and validate against the corresponding packaging skill's contract.
-Do not create a manifest for a checkpoint; it intentionally has none.
+Do not invent a handoff-style exhaustive file/checksum manifest for a checkpoint.
+Newer packages include an `artifact-manifest.json` for human navigation and keep
+authored files under `project/`. This is distinct from handoff's exhaustive file
+manifest; do not treat its presence as evidence that a checkpoint is final.
 If the actual project slug ends in `-checkpoint`, a handoff filename can look
 like another project's checkpoint. Inspect the unfiltered `.zip` inventory and
 ZIP metadata instead of relying on `--kind` or the parsed slug in that case.
