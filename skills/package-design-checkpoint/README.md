@@ -85,25 +85,46 @@ python3 "$AI_SKILLS_REPO/skills/package-design-checkpoint/scripts/package_checkp
   /absolute/path/to/project \
   --project-name "Actual OpenDesign Project Name" \
   --namespace "release-stable" \
-  --index index.html \
   --primary mockups/comparison.html "Primary comparison canvas" \
   --alternative mockups/mobile-error.html "Mobile validation-error state" \
+  --package-metadata /absolute/path/outside/project/package-metadata.json \
   --change "Refined hierarchy and added the mobile validation state"
 ```
 
 The project name is required and is never inferred from the filesystem or a
 mockup. The optional namespace is recorded separately. Run `--help` for explicit
 version, output-directory, exclusion, dry-run, and SHA-256 options.
+Describe what the recipient should review using the
+[metadata contract and example](references/package-metadata.md). CLI and metadata
+paths are relative to the source project, before its archive prefix.
 
 ## Archive contract
 
 - Filename: `<project-slug>-checkpoint-X.Y.Z.zip`
 - Initial version: `0.1.0`; later default: patch
-- Root navigation: `index.html` for multiple HTML mockups, otherwise `index.md`
-- Generated metadata: `_checkpoint/CHANGELOG.md` only
+- Root entrypoint: always a generated, offline `index.html`; README points there first
+- Source tree: byte-preserved under `project/`, including its existing index/README
+- Navigation metadata: root `artifact-manifest.json`, shared by the guide and README
+- Other generated metadata: `_checkpoint/CHANGELOG.md`, `_package/verification.json`
 - Publication: private validation followed by atomic no-clobber publication
 - Security: no symlinks; credential-like files require exact exclusion
 
 The helper does not generate a final implementation specification, exhaustive
-component inventory, file checksum manifest, CI/CD evidence, or `_handoff/`
+component inventory, per-file checksum manifest, invented CI/CD evidence, or `_handoff/`
 metadata.
+
+### Migrating to 0.2.0
+
+The package root is now the human guide, and authored files live under `project/`.
+Do not overlay the complete ZIP onto an existing project. Open root `index.html`
+first; copy or resume work from `project/` as appropriate. `--index index.md` is
+retired; `--index index.html` remains a compatibility spelling of the default.
+Archive version streams remain independent from the skill version. Select a
+minor package bump when migrating an existing pre-1.0 archive series to this layout.
+Prior archives remain unchanged.
+
+After release, re-import both packaging plugins in OpenDesign and confirm version
+0.2.0. Apply each plugin to a disposable project and create a smoke-test package:
+confirm its root guide, preserved `project/` preview, relative links, README,
+and correct checkpoint/handoff status. Desktop reinstallation is a separate
+post-release check, not something the helper performs.

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import hashlib
+import importlib.util
 import json
 import os
 from dataclasses import dataclass
@@ -193,6 +194,26 @@ class PayloadFile:
     size: int
     sha256: str
     mode: int
+    source_path: str | None = None
+
+
+def package_index_module():
+    """Load the skill-local renderer without depending on a repository checkout."""
+    name = "package_design_handoff_index"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(
+            name, Path(__file__).with_name("package_index.py")
+        )
+        if spec is None or spec.loader is None:
+            raise ValueError("cannot load the bundled package index renderer")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+def payload_source_path(item: PayloadFile) -> str:
+    return item.source_path or item.absolute_path.relative_to(item.source_root).as_posix()
 
 
 def slugify(project_name: str) -> str:
@@ -598,10 +619,11 @@ def inventory_payload(
                 PayloadFile(
                     source_root=source,
                     absolute_path=path,
-                    archive_path=relative,
+                    archive_path=f"project/{relative}",
                     size=file_stat.st_size,
                     sha256=digest,
                     mode=stat.S_IMODE(file_stat.st_mode),
+                    source_path=relative,
                 )
             )
 
@@ -694,16 +716,19 @@ def metadata_bytes(
     payload: list[PayloadFile],
     exclusions: list[str],
     reviewed_sensitive_inclusions: list[str],
+    generated_files: dict[str, bytes] | None = None,
+    generated_at: str | None = None,
 ) -> tuple[bytes, bytes, bytes]:
-    generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    generated_files = generated_files or {}
+    generated_at = generated_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "project_name": project_name,
         "project_slug": slug,
         "version": str(version),
         "archive_name": archive_name,
         "generated_at": generated_at,
-        "source_root": ".",
+        "source_root": "project/",
         "version_change": {
             "previous_version": str(previous) if previous else None,
             "type": bump_type,
@@ -714,22 +739,33 @@ def metadata_bytes(
         "exclusions": exclusions,
         "reviewed_sensitive_inclusions": reviewed_sensitive_inclusions,
         "files": [
-            {"path": item.archive_path, "size": item.size, "sha256": item.sha256}
+            {"path": item.archive_path, "source_path": payload_source_path(item),
+             "size": item.size, "sha256": item.sha256}
             for item in payload
+        ],
+        "generated_files": [
+            {"path": path, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+            for path, data in sorted(generated_files.items())
         ],
     }
     manifest_data = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
     readme_data = (
-        f"# {project_name} design handoff\n\n"
+        "Open [index.html](../index.html) first.\n\n"
+        f"# {project_name} — Handoff\n\n"
         f"- Version: `{version}`\n"
         f"- Previous version: `{previous if previous else 'none'}`\n"
         f"- Version change: `{bump_type}` — {bump_reason}\n"
         f"- Payload files: `{len(payload)}`\n"
-        f"- Payload root: archive root (`.`)\n\n"
+        f"- Original project root: `project/`\n\n"
         "`MANIFEST.json` inventories every payload file. "
-        "`CHECKSUMS.sha256` verifies the payload and handoff metadata.\n"
+        "Its `generated_files` section identifies the separate package guide metadata. "
+        "`CHECKSUMS.sha256` verifies the source payload, package guide, and handoff metadata.\n"
     ).encode("utf-8")
     checksum_rows = [f"{item.sha256}  {item.archive_path}" for item in payload]
+    checksum_rows.extend(
+        f"{hashlib.sha256(data).hexdigest()}  {path}"
+        for path, data in sorted(generated_files.items())
+    )
     checksum_rows.extend(
         [
             f"{hashlib.sha256(readme_data).hexdigest()}  {METADATA_README}",
@@ -746,7 +782,9 @@ def build_zip(
     readme_data: bytes,
     manifest_data: bytes,
     checksums_data: bytes,
+    generated_files: dict[str, bytes] | None = None,
 ) -> Path:
+    generated_files = generated_files or {}
     file_descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
     )
@@ -758,6 +796,7 @@ def build_zip(
         ) as archive:
             payload_by_name = {item.archive_path: item for item in payload}
             metadata_by_name = {
+                **generated_files,
                 METADATA_README: readme_data,
                 METADATA_MANIFEST: manifest_data,
                 METADATA_CHECKSUMS: checksums_data,
@@ -767,13 +806,13 @@ def build_zip(
                     archive.writestr(zip_info(archive_name), metadata_by_name[archive_name])
                     continue
                 item = payload_by_name[archive_name]
-                with open_project_file(item.source_root, item.archive_path) as source_handle:
+                with open_project_file(item.source_root, payload_source_path(item)) as source_handle:
                     with archive.open(zip_info(item.archive_path, item.mode), "w") as zip_handle:
                         shutil.copyfileobj(source_handle, zip_handle, length=1024 * 1024)
 
         with temporary.open("rb") as handle:
             os.fsync(handle.fileno())
-        validate_zip(temporary, payload)
+        validate_zip(temporary, payload, generated_files)
         try:
             os.link(temporary, destination)
         except FileExistsError:
@@ -793,8 +832,13 @@ def fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def validate_zip(destination: Path, payload: list[PayloadFile]) -> None:
-    expected_names = {item.archive_path for item in payload} | RESERVED_NAMES
+def validate_zip(
+    destination: Path,
+    payload: list[PayloadFile],
+    generated_files: dict[str, bytes] | None = None,
+) -> None:
+    generated_files = generated_files or {}
+    expected_names = {item.archive_path for item in payload} | RESERVED_NAMES | set(generated_files)
     with zipfile.ZipFile(destination, mode="r") as archive:
         corrupt = archive.testzip()
         if corrupt:
@@ -820,12 +864,30 @@ def validate_zip(destination: Path, payload: list[PayloadFile]) -> None:
             entry = manifest_files[item.archive_path]
             if entry["sha256"] != item.sha256 or entry["size"] != item.size:
                 raise ValueError(f"manifest metadata mismatch for '{item.archive_path}'")
+            if entry.get("source_path") != payload_source_path(item):
+                raise ValueError(f"manifest source provenance mismatch for '{item.archive_path}'")
+
+        manifest_generated = {entry["path"]: entry for entry in manifest.get("generated_files", [])}
+        if set(manifest_generated) != set(generated_files):
+            raise ValueError("manifest generated-file inventory does not match package guide")
+        for name, expected_bytes in generated_files.items():
+            archived_bytes = archive.read(name)
+            if archived_bytes != expected_bytes:
+                raise ValueError(f"generated package bytes changed for '{name}'")
+            entry = manifest_generated[name]
+            if entry["sha256"] != hashlib.sha256(archived_bytes).hexdigest() or entry["size"] != len(archived_bytes):
+                raise ValueError(f"generated manifest metadata mismatch for '{name}'")
+        if generated_files:
+            package_index_module().validate_index(
+                {name: archive.read(name) for name in set(generated_files) | RESERVED_NAMES},
+                archive.namelist(),
+            )
 
         checksum_entries: dict[str, str] = {}
         for line in archive.read(METADATA_CHECKSUMS).decode("utf-8").splitlines():
             digest, name = line.split("  ", 1)
             checksum_entries[name] = digest
-        expected_checksum_names = {item.archive_path for item in payload} | {
+        expected_checksum_names = {item.archive_path for item in payload} | set(generated_files) | {
             METADATA_README,
             METADATA_MANIFEST,
         }
@@ -844,6 +906,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("source", help="Project root to package")
     parser.add_argument("--project-name", required=True, help="Human-readable project name")
+    parser.add_argument("--package-metadata", help="Optional JSON package context for the root guide")
+    parser.add_argument(
+        "--primary", nargs=2, metavar=("TARGET", "LABEL"),
+        help="Primary project-relative preview and label; required here or in package metadata",
+    )
+    parser.add_argument(
+        "--alternative", nargs=2, action="append", default=[], metavar=("TARGET", "LABEL"),
+        help="Additional project-relative review target and label; repeat as needed",
+    )
     parser.add_argument(
         "--output-dir",
         help="Archive directory; defaults to the project root",
@@ -924,6 +995,32 @@ def main() -> int:
             reviewed_sensitive_inclusions=reviewed_sensitive_inclusions,
         )
         all_exclusions = sorted(set(ignore_patterns + automatic_exclusions))
+        index = package_index_module()
+        generated_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        generated_files = index.build_index(
+            project_name=project_name,
+            slug=slug,
+            artifact_type="handoff",
+            version=str(version),
+            change=bump_reason,
+            payload_paths=[payload_source_path(item) for item in payload],
+            primary={"path": args.primary[0], "label": args.primary[1]} if args.primary else None,
+            review_targets=[{"path": target, "label": label} for target, label in args.alternative],
+            metadata=index.load_metadata(args.package_metadata),
+            created_at=generated_at,
+            docs=[
+                {"path": METADATA_README, "label": "Handoff notes", "description": "Version change and source inventory guidance"},
+                {"path": METADATA_MANIFEST, "label": "Handoff manifest", "description": "Source provenance and generated package-file inventory"},
+                {"path": METADATA_CHECKSUMS, "label": "Checksums", "description": "SHA-256 values for payload and package metadata"},
+            ],
+        )
+        index.validate_index(
+            generated_files,
+            [item.archive_path for item in payload] + sorted(RESERVED_NAMES | set(generated_files)),
+        )
+        validate_portable_namespace(
+            [item.archive_path for item in payload] + sorted(RESERVED_NAMES | set(generated_files))
+        )
         plan = {
             "archive": str(destination),
             "project_name": project_name,
@@ -936,6 +1033,8 @@ def main() -> int:
             "payload_bytes": sum(item.size for item in payload),
             "exclusions": all_exclusions,
             "reviewed_sensitive_inclusions": reviewed_sensitive_inclusions,
+            "source_root": "project/",
+            "entrypoint": "index.html",
         }
         if args.dry_run:
             print(json.dumps(plan, indent=2, sort_keys=True))
@@ -952,8 +1051,10 @@ def main() -> int:
             payload=payload,
             exclusions=all_exclusions,
             reviewed_sensitive_inclusions=reviewed_sensitive_inclusions,
+            generated_files=generated_files,
+            generated_at=generated_at,
         )
-        build_zip(destination, payload, readme_data, manifest_data, checksums_data)
+        build_zip(destination, payload, readme_data, manifest_data, checksums_data, generated_files)
         archive_hash = hash_file(destination)
 
         print(f"Created: {destination}")

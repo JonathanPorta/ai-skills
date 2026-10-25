@@ -105,12 +105,12 @@ class PackageCheckpointTests(unittest.TestCase):
                 names = set(archive.namelist())
                 self.assertIn("index.html", names)
                 self.assertIn("_checkpoint/CHANGELOG.md", names)
-                self.assertIn("mockups/primary.html", names)
-                self.assertIn("mockups/mobile-error.html", names)
-                self.assertIn("assets/brand.svg", names)
-                self.assertIn("notes.md", names)
-                self.assertNotIn("node_modules/ignored/dependency.js", names)
-                self.assertNotIn(".git/config", names)
+                self.assertIn("project/mockups/primary.html", names)
+                self.assertIn("project/mockups/mobile-error.html", names)
+                self.assertIn("project/assets/brand.svg", names)
+                self.assertIn("project/notes.md", names)
+                self.assertNotIn("project/node_modules/ignored/dependency.js", names)
+                self.assertNotIn("project/.git/config", names)
                 self.assertFalse(any(name.startswith("_handoff/") for name in names))
                 self.assertNotIn("_checkpoint/MANIFEST.json", names)
                 self.assertNotIn("_checkpoint/CHECKSUMS.sha256", names)
@@ -120,8 +120,8 @@ class PackageCheckpointTests(unittest.TestCase):
                 self.assertIn("Primary comparison canvas", changelog)
                 self.assertIn("Mobile validation-error state", changelog)
                 index = archive.read("index.html").decode("utf-8")
-                self.assertIn('href="mockups/primary.html"', index)
-                self.assertIn('href="mockups/mobile-error.html"', index)
+                self.assertIn('href="project/mockups/primary.html"', index)
+                self.assertIn('href="project/mockups/mobile-error.html"', index)
 
     def test_default_increment_is_patch_and_version_stream_is_independent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -139,73 +139,34 @@ class PackageCheckpointTests(unittest.TestCase):
             self.assertTrue(second.is_file())
             with zipfile.ZipFile(second) as archive:
                 names = set(archive.namelist())
-                self.assertNotIn(first.name, names)
-                self.assertNotIn(handoff.name, names)
+                self.assertNotIn("project/" + first.name, names)
+                self.assertNotIn("project/" + handoff.name, names)
 
-    def test_markdown_index_is_allowed_for_nonbrowser_checkpoint(self) -> None:
+    def test_nonbrowser_checkpoint_still_gets_canonical_html_index(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             project = self.make_project(Path(temporary))
-            (project / "mockups" / "mobile-error.html").unlink()
-            (project / "mockups" / "primary.html").unlink()
+            shutil.rmtree(project / "mockups")
             result = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPT),
-                    str(project),
-                    "--project-name",
-                    "Research Notes",
-                    "--index",
-                    "index.md",
-                    "--primary",
-                    "notes.md",
-                    "Primary [review] state-exploration notes",
-                    "--change",
-                    "Captured the current research and state exploration",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
+                [sys.executable, str(SCRIPT), str(project),
+                 "--project-name", "Research Notes", "--primary", "notes.md",
+                 "Primary research findings", "--change", "Captured current research"],
+                capture_output=True, text=True, check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             with zipfile.ZipFile(project / "research-notes-checkpoint-0.1.0.zip") as archive:
-                self.assertIn("index.md", archive.namelist())
-                self.assertNotIn("index.html", archive.namelist())
-                self.assertIn(
-                    "Primary \\[review\\] state-exploration notes",
-                    archive.read("index.md").decode("utf-8"),
-                )
+                self.assertIn("index.html", archive.namelist())
+                self.assertNotIn("index.md", archive.namelist())
+                self.assertIn('href="project/notes.md"', archive.read("index.html").decode())
+                self.assertTrue(archive.read("README.md").decode().startswith("Open `index.html` first."))
 
-    def test_multiple_html_mockups_require_html_index(self) -> None:
+    def test_markdown_root_option_reports_migration(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             project = self.make_project(Path(temporary))
-            result = self.run_packager(
-                project,
-                "--index",
-                "index.md",
-                expect_success=False,
-            )
-
+            result = self.run_packager(project, "--index", "index.md", expect_success=False)
             self.assertEqual(result.returncode, 2)
-            self.assertIn("multiple browsable", result.stderr)
-            self.assertFalse(
-                (project / "actual-opendesign-project-checkpoint-0.1.0.zip").exists()
-            )
-
-    def test_mixed_targets_still_require_html_index_for_multiple_html_mockups(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            project = self.make_project(Path(temporary))
-            result = self.run_packager(
-                project,
-                "--index",
-                "index.md",
-                "--alternative",
-                "notes.md",
-                "Review and state-exploration notes",
-                expect_success=False,
-            )
-
-            self.assertEqual(result.returncode, 2)
-            self.assertIn("multiple browsable", result.stderr)
+            self.assertIn("all packages now use root index.html", result.stderr)
+            self.assertIn("remove --index index.md", result.stderr)
+            self.assertFalse(list(project.glob("*.zip")))
 
     def test_every_browsable_html_mockup_must_be_declared_or_excluded(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -233,10 +194,10 @@ class PackageCheckpointTests(unittest.TestCase):
             ),
             (
                 ("--alternative", "mockups/primary.html", "Duplicate primary"),
-                "duplicate target",
+                "primary target cannot also",
             ),
             (
-                ("--alternative", "mockups/mobile-error.html", "Alternative 1"),
+                ("--alternative", "notes.md", "Alternative 1"),
                 "functional label",
             ),
             (
@@ -417,78 +378,170 @@ class PackageCheckpointTests(unittest.TestCase):
                 (project / "actual-opendesign-project-checkpoint-0.1.0.zip").exists()
             )
 
-    def test_existing_index_must_name_labels_and_resolve_every_local_target(self) -> None:
+    def test_source_index_and_readme_are_preserved_as_authored(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             project = self.make_project(Path(temporary))
-            (project / "index.html").write_text(
-                "<!doctype html><a href='mockups/primary.html'>Primary comparison canvas</a>"
-                "<a href='mockups/missing.html'>Mobile validation-error state</a>\n",
-                encoding="utf-8",
-            )
+            source_index = b'<!doctype html><link rel="stylesheet" href="assets/site.css"><a href="index.html">Home</a>'
+            source_readme = b"Authored project documentation.\n"
+            (project / "index.html").write_bytes(source_index)
+            (project / "README.md").write_bytes(source_readme)
+            (project / "assets/site.css").write_bytes(b"body { color: navy; }\n")
+            self.run_packager(project, "--primary", "index.html", "Primary complete design preview",
+                              "--alternative", "mockups/primary.html", "Desktop comparison canvas")
+            with zipfile.ZipFile(project / "actual-opendesign-project-checkpoint-0.1.0.zip") as archive:
+                self.assertEqual(archive.read("project/index.html"), source_index)
+                self.assertEqual(archive.read("project/README.md"), source_readme)
+                self.assertIn("project/assets/site.css", archive.namelist())
+                self.assertNotEqual(archive.read("index.html"), source_index)
+                self.assertTrue(archive.read("README.md").startswith(b"Open `index.html` first."))
+                self.assertIn('href="project/index.html"', archive.read("index.html").decode())
+                self.assertIn("../project/index.html", archive.read("_checkpoint/CHANGELOG.md").decode())
+            self.assertEqual((project / "index.html").read_bytes(), source_index)
+            self.assertEqual((project / "README.md").read_bytes(), source_readme)
+            self.assertFalse((project / "artifact-manifest.json").exists())
 
-            result = self.run_packager(project, expect_success=False)
-
-            self.assertEqual(result.returncode, 2)
-            self.assertIn("index target does not exist", result.stderr)
-            self.assertFalse(
-                (project / "actual-opendesign-project-checkpoint-0.1.0.zip").exists()
-            )
-
-    def test_existing_index_labels_must_belong_to_their_declared_links(self) -> None:
+    def test_metadata_enriches_targets_and_adds_declared_html_review(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            project = self.make_project(Path(temporary))
-            (project / "index.html").write_text(
-                "<!doctype html>"
-                "<p>Primary comparison canvas</p>"
-                "<a href='mockups/primary.html'>Unlabeled destination</a>"
-                "<a href='mockups/mobile-error.html'>Mobile validation-error state</a>\n",
-                encoding="utf-8",
-            )
+            root = Path(temporary)
+            project = self.make_project(root)
+            (project / "tablet.html").write_text("<!doctype html><title>Tablet</title>")
+            metadata = root / "metadata.json"
+            metadata.write_text(json.dumps({
+                "primary": {"path": "mockups/primary.html", "label": "Primary comparison canvas",
+                            "description": "Compare the current hierarchy and responsive treatment."},
+                "review_targets": [{"path": "tablet.html", "label": "Tablet navigation behavior",
+                                    "description": "Review the compact navigation state.", "role": "alternate"}],
+                "decisions": ["Choose the tablet navigation treatment"],
+                "blockers": [], "withheld": [],
+            }))
+            self.run_packager(project, "--package-metadata", str(metadata))
+            with zipfile.ZipFile(project / "actual-opendesign-project-checkpoint-0.1.0.zip") as archive:
+                index = archive.read("index.html").decode()
+                self.assertIn("Compare the current hierarchy", index)
+                self.assertIn("Choose the tablet navigation treatment", index)
+                self.assertIn('href="project/tablet.html"', index)
+                self.assertIn("../project/tablet.html", archive.read("_checkpoint/CHANGELOG.md").decode())
 
-            result = self.run_packager(project, expect_success=False)
+    def test_metadata_rejects_missing_and_external_links_before_publication(self) -> None:
+        for value in ("missing.txt", "https://example.test/evidence", "../outside.txt"):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                project = self.make_project(root)
+                metadata = root / "metadata.json"
+                metadata.write_text(json.dumps({"verification": {
+                    "status": "passed", "summary": "Caller supplied checks", "evidence": value,
+                }}))
+                result = self.run_packager(project, "--package-metadata", str(metadata), expect_success=False)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse(list(project.glob("*.zip")))
 
-            self.assertEqual(result.returncode, 2)
-            self.assertIn("does not functionally label its link", result.stderr)
-
-    def test_existing_index_validates_srcset_targets(self) -> None:
+    def test_metadata_cannot_claim_checkpoint_deployment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            project = self.make_project(Path(temporary))
-            (project / "index.html").write_text(
-                "<!doctype html>"
-                "<a href='mockups/primary.html'>Primary comparison canvas</a>"
-                "<a href='mockups/mobile-error.html'>Mobile validation-error state</a>"
-                "<img srcset='assets/brand.svg 1x, assets/missing.svg 2x'>\n",
-                encoding="utf-8",
-            )
-
-            result = self.run_packager(project, expect_success=False)
-
+            root = Path(temporary)
+            project = self.make_project(root)
+            metadata = root / "metadata.json"
+            metadata.write_text(json.dumps({"deployment": {"posture": "deployable", "path": "mockups"}}))
+            result = self.run_packager(project, "--package-metadata", str(metadata), expect_success=False)
             self.assertEqual(result.returncode, 2)
-            self.assertIn("assets/missing.svg", result.stderr)
+            self.assertFalse(list(project.glob("*.zip")))
 
-    def test_existing_index_rejects_unsafe_local_urls(self) -> None:
-        unsafe_targets = (
-            "../outside.html",
-            "/absolute.html",
-            "file:///tmp/secret",
-            "javascript:alert(1)",
-            "mockups%2f..%2foutside.html",
-            "mockups\\primary.html",
-        )
-        for target in unsafe_targets:
-            with self.subTest(target=target):
-                with tempfile.TemporaryDirectory() as temporary:
-                    project = self.make_project(Path(temporary))
-                    (project / "index.html").write_text(
-                        "<!doctype html>"
-                        "<a href='mockups/primary.html'>Primary comparison canvas</a>"
-                        "<a href='mockups/mobile-error.html'>Mobile validation-error state</a>"
-                        f"<a href='{target}'>Unsafe target</a>\n",
-                        encoding="utf-8",
-                    )
-                    result = self.run_packager(project, expect_success=False)
+    def test_metadata_cannot_silently_replace_the_cli_primary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = self.make_project(root)
+            metadata = root / "metadata.json"
+            metadata.write_text(json.dumps({"primary": {
+                "path": "notes.md", "label": "Research findings and open questions",
+            }}))
+            result = self.run_packager(project, "--package-metadata", str(metadata), expect_success=False)
+            self.assertEqual(result.returncode, 2)
+            self.assertFalse(list(project.glob("*.zip")))
+
+    def test_metadata_can_supply_the_primary_without_cli_primary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = self.make_project(root)
+            metadata = root / "metadata.json"
+            metadata.write_text(json.dumps({
+                "primary": {"path": "mockups/primary.html", "label": "Primary comparison canvas"},
+                "review_targets": [{"path": "mockups/mobile-error.html", "label": "Mobile validation-error state"}],
+            }))
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), str(project), "--project-name", "Project",
+                 "--change", "Captured current design", "--package-metadata", str(metadata)],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with zipfile.ZipFile(project / "project-checkpoint-0.1.0.zip") as archive:
+                guide = json.loads(archive.read("artifact-manifest.json"))
+                self.assertEqual(guide["primary"]["path"], "project/mockups/primary.html")
+                self.assertIn("Primary comparison canvas", archive.read("_checkpoint/CHANGELOG.md").decode())
+
+    def test_metadata_can_enrich_a_cli_alternative_without_repeating_label(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = self.make_project(root)
+            metadata = root / "metadata.json"
+            metadata.write_text(json.dumps({"review_targets": [{
+                "path": "mockups/mobile-error.html", "description": "Review field-level errors on a narrow screen.",
+            }]}))
+            self.run_packager(project, "--package-metadata", str(metadata))
+            with zipfile.ZipFile(project / "actual-opendesign-project-checkpoint-0.1.0.zip") as archive:
+                guide = json.loads(archive.read("artifact-manifest.json"))
+                self.assertEqual(guide["review_targets"][0]["label"], "Mobile validation-error state")
+                self.assertIn("Review field-level errors", archive.read("index.html").decode())
+
+    def test_metadata_label_overrides_are_shared_with_changelog_and_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = self.make_project(root)
+            metadata = root / "metadata.json"
+            metadata.write_text(json.dumps({
+                "primary": {"path": "mockups/primary.html", "label": "Desktop hierarchy comparison"},
+                "review_targets": [{"path": "mockups/mobile-error.html", "label": "Compact form validation behavior"}],
+            }))
+            self.run_packager(project, "--package-metadata", str(metadata))
+            with zipfile.ZipFile(project / "actual-opendesign-project-checkpoint-0.1.0.zip") as archive:
+                changelog = archive.read("_checkpoint/CHANGELOG.md").decode()
+                for label in ("Desktop hierarchy comparison", "Compact form validation behavior"):
+                    self.assertIn(label, changelog)
+                    self.assertIn(label, archive.read("index.html").decode())
+                self.assertNotIn("Primary comparison canvas", changelog)
+            for invalid in (
+                {"review_targets": [{"path": "mockups/mobile-error.html", "label": "Alternative 1"}]},
+                {"primary": {"path": "mockups/primary.html", "label": "Alternative 1"}},
+            ):
+                with self.subTest(override=invalid):
+                    metadata.write_text(json.dumps(invalid))
+                    result = self.run_packager(project, "--package-metadata", str(metadata), expect_success=False)
                     self.assertEqual(result.returncode, 2)
-                    self.assertIn("unsafe index target", result.stderr)
+                    self.assertIn("functional label", result.stderr)
+                    self.assertFalse((project / "actual-opendesign-project-checkpoint-0.1.1.zip").exists())
+
+    def test_metadata_new_review_target_requires_its_own_label(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = self.make_project(root)
+            metadata = root / "metadata.json"
+            metadata.write_text(json.dumps({"review_targets": [{
+                "path": "notes.md", "description": "Review the supporting notes.",
+            }]}))
+            result = self.run_packager(project, "--package-metadata", str(metadata), expect_success=False)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("label", result.stderr)
+            self.assertFalse(list(project.glob("*.zip")))
+
+    def test_missing_primary_is_an_actionable_cli_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = self.make_project(Path(temporary))
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), str(project), "--project-name", "Project",
+                 "--change", "Captured current design"],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("--primary", result.stderr)
+            self.assertFalse(list(project.glob("*.zip")))
 
     def test_credential_like_files_fail_closed_or_allow_exact_exclusion(self) -> None:
         for relative_path in (
@@ -520,7 +573,7 @@ class PackageCheckpointTests(unittest.TestCase):
             with zipfile.ZipFile(
                 project / "actual-opendesign-project-checkpoint-0.1.0.zip"
             ) as archive:
-                self.assertNotIn(".env", archive.namelist())
+                self.assertNotIn("project/.env", archive.namelist())
 
     def test_common_credential_filename_forms_fail_closed(self) -> None:
         sensitive_names = (
@@ -629,7 +682,7 @@ class PackageCheckpointTests(unittest.TestCase):
             with zipfile.ZipFile(
                 project / "actual-opendesign-project-checkpoint-0.1.0.zip"
             ) as archive:
-                self.assertNotIn("api-token.txt", archive.namelist())
+                self.assertNotIn("project/api-token.txt", archive.namelist())
 
     def test_bounded_noncredential_filename_words_remain_allowed(self) -> None:
         safe_names = (
@@ -685,7 +738,7 @@ class PackageCheckpointTests(unittest.TestCase):
             with zipfile.ZipFile(
                 project / "actual-opendesign-project-checkpoint-0.1.0.zip"
             ) as archive:
-                self.assertTrue(set(packaged_names).issubset(archive.namelist()))
+                self.assertTrue({"project/" + name for name in packaged_names}.issubset(archive.namelist()))
 
     def test_vcs_control_files_and_case_variant_dependencies_are_excluded(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -706,8 +759,8 @@ class PackageCheckpointTests(unittest.TestCase):
                 project / "actual-opendesign-project-checkpoint-0.1.0.zip"
             ) as archive:
                 names = set(archive.namelist())
-                self.assertNotIn(".git", names)
-                self.assertNotIn("NODE_MODULES/ignored/dependency.js", names)
+                self.assertNotIn("project/.git", names)
+                self.assertNotIn("project/NODE_MODULES/ignored/dependency.js", names)
 
     def test_generated_html_url_encodes_reserved_characters_in_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -820,7 +873,7 @@ class PackageCheckpointTests(unittest.TestCase):
             item = PACKAGE.PayloadFile(
                 source_root=root,
                 absolute_path=source,
-                archive_path="primary.html",
+                archive_path="project/primary.html",
                 size=source.stat().st_size,
                 sha256=PACKAGE.hash_file(source),
                 mode=0o644,
@@ -832,12 +885,13 @@ class PackageCheckpointTests(unittest.TestCase):
                     primary=True,
                 )
             ]
-            generated = {
-                "index.html": PACKAGE.generated_index_bytes(
-                    "index.html", "Project", None, targets
-                ),
-                "_checkpoint/CHANGELOG.md": b"checkpoint\n",
-            }
+            generated = PACKAGE.PACKAGE_INDEX.build_index(
+                project_name="Project", slug="project", artifact_type="checkpoint",
+                version="0.1.0", change="Captured review state", payload_paths=["primary.html"],
+                primary={"path": "primary.html", "label": "Primary comparison canvas"},
+                docs=[{"path": "_checkpoint/CHANGELOG.md", "label": "Checkpoint changelog"}],
+            )
+            generated["_checkpoint/CHANGELOG.md"] = b"checkpoint\n"
             destination = root / "project-checkpoint-0.1.0.zip"
             with mock.patch.object(
                 PACKAGE,
@@ -854,27 +908,20 @@ class PackageCheckpointTests(unittest.TestCase):
                     )
             self.assertFalse(destination.exists())
 
-    def test_existing_index_allows_external_links_when_local_targets_are_valid(self) -> None:
+    def test_authored_external_links_do_not_leak_into_canonical_index(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             project = self.make_project(Path(temporary))
-            (project / "index.html").write_text(
-                "<!doctype html>"
-                "<a href='https://example.test/reference'>External reference</a>"
-                "<a href='mockups/primary.html'>Primary comparison canvas</a>"
-                "<a href='mockups/mobile-error.html'>Mobile validation-error state</a>\n",
-                encoding="utf-8",
-            )
-
-            self.run_packager(project)
-
-            self.assertTrue(
-                (project / "actual-opendesign-project-checkpoint-0.1.0.zip").is_file()
-            )
+            source_index = '<!doctype html><a href="https://example.test/reference">External reference</a>'
+            (project / "index.html").write_text(source_index)
+            self.run_packager(project, "--alternative", "index.html", "Project reference collection")
+            with zipfile.ZipFile(project / "actual-opendesign-project-checkpoint-0.1.0.zip") as archive:
+                self.assertEqual(archive.read("project/index.html").decode(), source_index)
+                self.assertNotIn("https://example.test", archive.read("index.html").decode())
 
     def test_manifest_declares_plugin_local_skill_runtime_binding(self) -> None:
         manifest = json.loads((SKILL_DIR / "open-design.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "package-design-checkpoint")
-        self.assertEqual(manifest["version"], "0.1.0")
+        self.assertEqual(manifest["version"], "0.2.0")
         self.assertEqual(manifest["compat"]["agentSkills"], [{"path": "./SKILL.md"}])
         self.assertEqual(manifest["od"]["context"]["skills"], [{"path": "./SKILL.md"}])
         self.assertEqual(manifest["od"]["capabilities"], ["prompt:inject"])

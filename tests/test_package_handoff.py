@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import errno
 import importlib.util
 from pathlib import Path
@@ -30,6 +31,7 @@ class PackageHandoffTests(unittest.TestCase):
         project: Path,
         *extra_arguments: str,
         expect_success: bool = True,
+        with_primary: bool = True,
     ) -> subprocess.CompletedProcess[str]:
         result = subprocess.run(
             [
@@ -40,6 +42,7 @@ class PackageHandoffTests(unittest.TestCase):
                 "Sample Design",
                 "--bump-reason",
                 "Exercise repository packaging behavior",
+                *(["--primary", "assets/screen.svg", "Current design preview"] if with_primary else []),
                 *extra_arguments,
             ],
             check=False,
@@ -76,8 +79,12 @@ class PackageHandoffTests(unittest.TestCase):
                 self.assertEqual(
                     names,
                     {
-                        "design.fig",
-                        "assets/screen.svg",
+                        "project/design.fig",
+                        "project/assets/screen.svg",
+                        "index.html",
+                        "README.md",
+                        "artifact-manifest.json",
+                        "_package/verification.json",
                         "_handoff/README.md",
                         "_handoff/MANIFEST.json",
                         "_handoff/CHECKSUMS.sha256",
@@ -86,6 +93,8 @@ class PackageHandoffTests(unittest.TestCase):
                 manifest = json.loads(archive.read("_handoff/MANIFEST.json"))
                 self.assertEqual(manifest["version"], "0.1.0")
                 self.assertEqual(manifest["payload_file_count"], 2)
+                self.assertEqual(manifest["source_root"], "project/")
+                self.assertEqual(manifest["schema_version"], 2)
 
     def test_credential_like_files_fail_closed_without_exact_review(self) -> None:
         sensitive_files = {
@@ -131,7 +140,7 @@ class PackageHandoffTests(unittest.TestCase):
             self.run_packager(project, "--exclude", ".npmrc")
 
             with zipfile.ZipFile(project / "sample-design-0.1.0.zip") as archive:
-                self.assertNotIn(".npmrc", archive.namelist())
+                self.assertNotIn("project/.npmrc", archive.namelist())
 
         with tempfile.TemporaryDirectory() as temporary:
             project = self.make_project(Path(temporary))
@@ -146,7 +155,7 @@ class PackageHandoffTests(unittest.TestCase):
             )
 
             with zipfile.ZipFile(project / "sample-design-0.1.0.zip") as archive:
-                self.assertIn("config/credentials.json", archive.namelist())
+                self.assertIn("project/config/credentials.json", archive.namelist())
                 manifest = json.loads(archive.read("_handoff/MANIFEST.json"))
                 self.assertEqual(
                     manifest["reviewed_sensitive_inclusions"],
@@ -253,7 +262,7 @@ class PackageHandoffTests(unittest.TestCase):
             self.run_packager(project, "--exclude", "api-token.txt")
 
             with zipfile.ZipFile(project / "sample-design-0.1.0.zip") as archive:
-                self.assertNotIn("api-token.txt", archive.namelist())
+                self.assertNotIn("project/api-token.txt", archive.namelist())
 
         with tempfile.TemporaryDirectory() as temporary:
             project = self.make_project(Path(temporary))
@@ -267,7 +276,7 @@ class PackageHandoffTests(unittest.TestCase):
             )
 
             with zipfile.ZipFile(project / "sample-design-0.1.0.zip") as archive:
-                self.assertIn("github_token.txt", archive.namelist())
+                self.assertIn("project/github_token.txt", archive.namelist())
                 manifest = json.loads(archive.read("_handoff/MANIFEST.json"))
                 self.assertEqual(
                     manifest["reviewed_sensitive_inclusions"],
@@ -319,7 +328,7 @@ class PackageHandoffTests(unittest.TestCase):
             self.run_packager(project)
 
             with zipfile.ZipFile(project / "sample-design-0.1.0.zip") as archive:
-                self.assertTrue(set(safe_names).issubset(archive.namelist()))
+                self.assertTrue({f"project/{name}" for name in safe_names}.issubset(archive.namelist()))
 
     def test_sensitive_file_globs_do_not_count_as_exact_review(self) -> None:
         controls = (
@@ -372,8 +381,8 @@ class PackageHandoffTests(unittest.TestCase):
 
             with zipfile.ZipFile(project / "sample-design-0.1.0.zip") as archive:
                 names = set(archive.namelist())
-                self.assertIn("licensed-assets-1.0.0.zip", names)
-                self.assertNotIn(".venv/lib/dependency.py", names)
+                self.assertIn("project/licensed-assets-1.0.0.zip", names)
+                self.assertNotIn("project/.venv/lib/dependency.py", names)
 
     def test_vcs_control_files_and_case_variant_dependencies_are_excluded(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -392,8 +401,8 @@ class PackageHandoffTests(unittest.TestCase):
 
             with zipfile.ZipFile(project / "sample-design-0.1.0.zip") as archive:
                 names = set(archive.namelist())
-                self.assertNotIn(".git", names)
-                self.assertNotIn("NODE_MODULES/ignored/dependency.js", names)
+                self.assertNotIn("project/.git", names)
+                self.assertNotIn("project/NODE_MODULES/ignored/dependency.js", names)
 
     def test_checkpoint_archives_are_excluded_without_affecting_handoff_version(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -406,7 +415,7 @@ class PackageHandoffTests(unittest.TestCase):
             archive_path = project / "sample-design-0.1.0.zip"
             self.assertTrue(archive_path.is_file())
             with zipfile.ZipFile(archive_path) as archive:
-                self.assertNotIn(checkpoint.name, archive.namelist())
+                self.assertNotIn(f"project/{checkpoint.name}", archive.namelist())
 
     def test_portable_zip_namespace_rejects_separator_collision(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -467,7 +476,7 @@ class PackageHandoffTests(unittest.TestCase):
             self.run_packager(project)
 
             with zipfile.ZipFile(project / "sample-design-0.1.0.zip") as archive:
-                self.assertIn("assets/élan-日本語.txt", archive.namelist())
+                self.assertIn("project/assets/élan-日本語.txt", archive.namelist())
 
     def test_portable_namespace_rejects_case_unicode_reserved_and_traversal_names(self) -> None:
         controls = (
@@ -502,6 +511,85 @@ class PackageHandoffTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "bad zip"):
                     PACKAGE.build_zip(destination, payload, b"readme", b"{}", b"")
             self.assertFalse(destination.exists())
+
+    def test_source_index_readme_and_relative_preview_links_are_preserved(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = self.make_project(Path(temporary))
+            originals = {
+                "index.html": b'<html><img src="assets/screen.svg"><a href="views/mobile.html">Mobile</a></html>',
+                "README.md": b"# Original project notes\nDo not rewrite this source.\n",
+                "views/mobile.html": b'<html><a href="../index.html">Home</a></html>',
+            }
+            for path, data in originals.items():
+                target = project / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            self.run_packager(project, "--primary", "index.html", "Desktop preview")
+            with zipfile.ZipFile(project / "sample-design-0.1.0.zip") as archive:
+                for path, data in originals.items():
+                    self.assertEqual((project / path).read_bytes(), data)
+                    self.assertEqual(archive.read(f"project/{path}"), data)
+                self.assertTrue(archive.read("README.md").startswith(b"Open `index.html` first."))
+                self.assertIn('href="project/index.html"', archive.read("index.html").decode())
+                self.assertNotEqual(archive.read("index.html"), originals["index.html"])
+
+    def test_package_guide_files_are_manifested_and_checksummed_separately(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = self.make_project(Path(temporary))
+            self.run_packager(project)
+            with zipfile.ZipFile(project / "sample-design-0.1.0.zip") as archive:
+                manifest = json.loads(archive.read("_handoff/MANIFEST.json"))
+                generated = {row["path"]: row for row in manifest["generated_files"]}
+                self.assertEqual(set(generated), {"index.html", "README.md", "artifact-manifest.json", "_package/verification.json"})
+                for path, row in generated.items():
+                    self.assertEqual(row["sha256"], hashlib.sha256(archive.read(path)).hexdigest())
+                    self.assertEqual(row["size"], len(archive.read(path)))
+                for row in manifest["files"]:
+                    self.assertEqual(row["path"], "project/" + row["source_path"])
+                    self.assertEqual(row["sha256"], hashlib.sha256((project / row["source_path"]).read_bytes()).hexdigest())
+                checksums = dict(line.split("  ", 1)[::-1] for line in archive.read("_handoff/CHECKSUMS.sha256").decode().splitlines())
+                self.assertEqual(set(checksums), set(archive.namelist()) - {"_handoff/CHECKSUMS.sha256"})
+                for path, digest in checksums.items():
+                    self.assertEqual(digest, hashlib.sha256(archive.read(path)).hexdigest())
+
+    def test_primary_is_required_and_must_resolve_even_for_dry_run(self) -> None:
+        for arguments in ((), ("--primary", "missing.html", "Missing preview")):
+            with self.subTest(arguments=arguments), tempfile.TemporaryDirectory() as temporary:
+                project = self.make_project(Path(temporary))
+                result = self.run_packager(project, *arguments, "--dry-run", with_primary=False, expect_success=False)
+                self.assertEqual(result.returncode, 2)
+                self.assertFalse((project / "sample-design-0.1.0.zip").exists())
+
+    def test_metadata_can_supply_primary_and_truthful_review_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = self.make_project(root)
+            metadata = root / "guide.json"
+            metadata.write_text(json.dumps({
+                "primary": {"path": "assets/screen.svg", "label": "Current design", "description": "Open the reviewed SVG design."},
+                "decisions": [], "blockers": [], "withheld": [],
+                "verification": {"status": "not-run", "summary": "No project tests were run for this package."},
+                "deployment": {"posture": "implementation-ready"},
+            }), encoding="utf-8")
+            self.run_packager(project, "--package-metadata", str(metadata), with_primary=False)
+            with zipfile.ZipFile(project / "sample-design-0.1.0.zip") as archive:
+                guide = json.loads(archive.read("artifact-manifest.json"))
+                self.assertEqual(guide["primary"]["path"], "project/assets/screen.svg")
+                self.assertEqual(guide["verification"]["status"], "not-run")
+                self.assertEqual(guide["deployment"]["posture"], "implementation-ready")
+                self.assertIn("No project tests were run", archive.read("index.html").decode())
+
+    def test_broken_declared_evidence_never_publishes_package(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = self.make_project(root)
+            metadata = root / "guide.json"
+            metadata.write_text(json.dumps({
+                "verification": {"status": "passed", "summary": "Reported tests", "evidence": "missing-report.txt"},
+            }), encoding="utf-8")
+            result = self.run_packager(project, "--package-metadata", str(metadata), expect_success=False)
+            self.assertEqual(result.returncode, 2)
+            self.assertFalse((project / "sample-design-0.1.0.zip").exists())
 
     def test_validation_failure_never_deletes_a_competing_destination(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

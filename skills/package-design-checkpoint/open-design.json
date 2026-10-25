@@ -3,7 +3,7 @@
   "specVersion": "1.0.0",
   "name": "package-design-checkpoint",
   "title": "Package Design Checkpoint",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Freeze the current design state as an immutable, reviewable, separately versioned checkpoint ZIP without claiming final implementation readiness.",
   "author": {
     "name": "Jonathan Porta",
@@ -31,7 +31,7 @@
     "platform": "desktop",
     "scenario": "design-checkpoint",
     "useCase": {
-      "query": "Freeze the current OpenDesign project as an immutable, versioned design-review checkpoint with a root index, one primary target, functionally labeled alternatives, and a concise changelog. Do not create a full implementation handoff."
+      "query": "Freeze the current OpenDesign project as an immutable, versioned design-review checkpoint with a root index, one primary target, functionally labeled alternatives, and a concise changelog. Do not create a full implementation handoff. Always generate the canonical offline root index.html guide and preserve authored files under project/."
     },
     "context": {
       "skills": [

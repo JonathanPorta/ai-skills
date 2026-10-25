@@ -23,14 +23,13 @@ conversation shorthand, not a literal Open Design slash command.
    direction, relevant nonvisual design artifact, and required local asset.
    Choose exactly one primary target. Give every alternative a functional label
    that explains its role or state; labels such as “Alternative 1” are invalid.
-4. Choose the root index:
-   - Use `index.html` when two or more declared targets are browsable HTML
-     mockups.
-   - Use `index.md` when an HTML launcher does not make sense.
-   - If the selected root index already exists, it must link every declared
-     target, contain the functional labels, and have no broken or unsafe local
-     links. Otherwise the helper generates it inside the ZIP without modifying
-     the project directory.
+4. Prepare the review context using
+   [the package metadata contract](references/package-metadata.md). Supply concise
+   descriptions, review steps, current decisions/blockers, withheld items,
+   package-map annotations, and truthful verification evidence. Keep checkpoint
+   deployment posture `review-only`. The helper always generates a polished root
+   `index.html`; an authored index remains intact under `project/` and may be the
+   primary preview. Never reuse a project page as the package guide.
 5. Write one concise `--change` statement. Use a patch bump unless the user
    explicitly fixes another version or the checkpoint series intentionally
    changes scope. The first checkpoint is `0.1.0`; subsequent unspecified runs
@@ -47,16 +46,18 @@ conversation shorthand, not a literal Open Design slash command.
      /path/to/project \
      --project-name "Actual OpenDesign Project Name" \
      --namespace "OpenDesign namespace, when present" \
-     --index index.html \
      --primary mockups/comparison.html "Primary comparison canvas" \
      --alternative mockups/mobile-error.html "Mobile validation-error state" \
+     --package-metadata /path/outside/project/package-metadata.json \
      --change "Refined comparison hierarchy and added the mobile error state"
    ```
 
    Repeat `--alternative TARGET LABEL` for every alternative. Use
    `--report-sha256` only when the user needs a final archive digest. Use exact
    `--exclude` paths or intentional globs for project-specific exclusions;
-   credential-like files require an exact exclusion.
+   credential-like files require an exact exclusion. Metadata paths and all CLI
+   targets are relative to the source project, before the `project/` archive prefix.
+   The old `--index index.md` option is no longer supported.
 7. Trust completion only after the helper opens and validates the private ZIP,
    verifies every local root-index target, and publishes atomically. Fix any
    missing target, credential boundary, symlink, nonportable name, namespace
@@ -64,13 +65,15 @@ conversation shorthand, not a literal Open Design slash command.
 8. Return the checkpoint archive or clickable link with its exact filename,
    version, primary target, alternative labels, and intentional exclusions.
    Include the SHA-256 only when it was requested. Explicitly call the package a
-   nonfinal checkpoint.
+   nonfinal checkpoint and tell the recipient to open root `index.html` first.
 
 ## Checkpoint contract
 
 - Name archives `<project-slug>-checkpoint-<MAJOR.MINOR.PATCH>.zip` using the
   explicit project name. Keep namespace metadata separate.
-- Package project-root contents directly, without an outer wrapper directory.
+- Preserve all authored paths and bytes together under `project/`. This keeps an
+  existing source `index.html`, README, and their relative links intact. Version
+  0.2.0 of the skill replaces the previous archive-root overlay layout.
 - Preserve prior archives on disk and exclude recognized checkpoint archives
   plus the current project's handoff archives from the new payload so packages
   never recursively nest.
@@ -78,10 +81,17 @@ conversation shorthand, not a literal Open Design slash command.
   `.opendesign-checkpointignore` control file.
 - Fail closed on credential-like files unless their exact project-relative path
   is excluded. Do not follow symlinks.
-- Add only the selected root index (when generation is needed) and
-  `_checkpoint/CHANGELOG.md` without modifying the source directory.
+- Generate root `index.html`, `README.md`, and `artifact-manifest.json`, plus
+  `_package/verification.json` and `_checkpoint/CHANGELOG.md`, without modifying
+  the source directory. The guide presents identity, start here, changes, review
+  steps, decisions/blockers, package map, verification, and documentation in order.
+- Derive the guide and README from the same navigation metadata; start the README
+  with **Open `index.html` first.**. Render empty decisions/blockers explicitly as
+  None. Keep the guide self-contained, relative-linked, and usable without scripts.
 - Do not generate `_handoff/` metadata, an implementation specification,
-  exhaustive component inventory, internal file manifest, internal checksum
-  inventory, CI/CD evidence, or a full implementation handoff.
+  exhaustive component inventory, per-file checksum inventory, fabricated CI/CD
+  evidence, or a full implementation handoff. The navigation manifest describes
+  the package; it is not the exhaustive handoff manifest. Distinguish passed
+  packaging checks from caller-reported project verification and unrun tests.
 - Validate sorted portable entry names, source bytes, ZIP CRC, declared targets,
   all local root-index links, and generated metadata before reporting success.

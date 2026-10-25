@@ -3,7 +3,7 @@
   "specVersion": "1.0.0",
   "name": "package-design-handoff",
   "title": "Package Design Handoff",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Package an accepted design project into an immutable, complete, versioned implementation handoff ZIP.",
   "author": {
     "name": "Jonathan Porta",
@@ -31,7 +31,7 @@
     "platform": "desktop",
     "scenario": "design-handoff",
     "useCase": {
-      "query": "Package the accepted current OpenDesign project as a complete, immutable, versioned implementation handoff ZIP. Follow the Package Design Handoff workflow exactly."
+      "query": "Package the accepted current OpenDesign project as a complete, immutable, versioned implementation handoff ZIP. Follow the Package Design Handoff workflow exactly. Always generate the canonical offline root index.html guide and preserve authored files under project/."
     },
     "context": {
       "skills": [
