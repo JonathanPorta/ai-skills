@@ -1,0 +1,4 @@
+interface:
+  display_name: "Inspect OpenDesign"
+  short_description: "Inspect project runs and retrieve design archives"
+  default_prompt: "Use $inspect-opendesign to check my local OpenDesign projects and find the latest handoff and checkpoint ZIPs."

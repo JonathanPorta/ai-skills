@@ -8,6 +8,7 @@ additive plugin sidecar stay beside the portable `SKILL.md` they describe.
 
 | Skill | Use it for | Open Design | OpenAI ChatGPT / Codex | Other Agent Skills harnesses |
 |---|---|---|---|---|
+| [`inspect-opendesign`](skills/inspect-opendesign/) | Inspect local projects and runs, find versioned handoff/checkpoint ZIPs, and retrieve existing artifacts from an external agent. | API 0.25.0 source-checked; local HTTP fixtures tested | Format-compatible; live desktop use not yet verified | Format-compatible; not yet verified |
 | [`package-design-checkpoint`](skills/package-design-checkpoint/) | Freeze an interim design state for review, comparison, or later resumption with a root index and concise changelog. | First-class GitHub plugin; current runtime contract-tested at `fe1231e…` | Format-compatible; helper tested, direct harness not yet verified | Format-compatible; not yet verified |
 | [`package-design-handoff`](skills/package-design-handoff/) | Deliver an accepted, complete, implementation-ready design package with manifest, checksums, and provenance. | First-class GitHub plugin; current runtime contract-tested at `fe1231e…` | Verified | Format-compatible; not yet verified |
 | [`ai-scratch`](skills/ai-scratch/) | Keep review clones and generated files in one designated scratch directory, and reclaim its disk through a confirm-first cleanup. | Format-compatible; not yet verified | Format-compatible; not yet verified | Verified with Claude Code |
@@ -44,6 +45,8 @@ Plugins UI.
 ```text
 ai-skills/
 ├── skills/
+│   ├── inspect-opendesign/
+│   │   └── ...portable skill, API helper, and reference...
 │   ├── package-design-checkpoint/
 │   │   ├── SKILL.md
 │   │   ├── README.md
@@ -134,6 +137,7 @@ ln -s "$AI_SKILLS_REPO/skills/package-design-handoff" \
   "$HOME/.agents/skills/package-design-handoff"
 ln -s "$AI_SKILLS_REPO/skills/ai-scratch" "$HOME/.agents/skills/ai-scratch"
 ln -s "$AI_SKILLS_REPO/skills/recon" "$HOME/.agents/skills/recon"
+ln -s "$AI_SKILLS_REPO/skills/inspect-opendesign" "$HOME/.agents/skills/inspect-opendesign"
 ```
 
 For Claude Code, link the same directories into `~/.claude/skills/`:
@@ -142,6 +146,7 @@ For Claude Code, link the same directories into `~/.claude/skills/`:
 mkdir -p "$HOME/.claude/skills"
 ln -s "$AI_SKILLS_REPO/skills/ai-scratch" "$HOME/.claude/skills/ai-scratch"
 ln -s "$AI_SKILLS_REPO/skills/recon" "$HOME/.claude/skills/recon"
+ln -s "$AI_SKILLS_REPO/skills/inspect-opendesign" "$HOME/.claude/skills/inspect-opendesign"
 ```
 
 Symlinking keeps the installed agent on the reviewed checkout. Review and run
@@ -197,7 +202,7 @@ resource references, hidden Unicode, JSON, Python syntax, naming, and
 skill-local documentation. It requires GNU Make and Python 3.10 or newer, with
 no third-party Python packages.
 
-The current Open Design contract test is separate because it checks out and
+The current Open Design plugin contract test is separate because it checks out and
 installs the exact pinned upstream runtime:
 
 ```bash

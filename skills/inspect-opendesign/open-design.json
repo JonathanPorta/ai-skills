@@ -1,0 +1,18 @@
+{
+  "$schema": "https://open-design.ai/schemas/plugin.v1.json",
+  "specVersion": "1.0.0",
+  "name": "inspect-opendesign",
+  "title": "Inspect OpenDesign",
+  "version": "0.1.0",
+  "description": "Inspect local OpenDesign projects, runs, and existing handoff or checkpoint artifacts from a local agent.",
+  "author": {"name": "Jonathan Porta", "url": "https://github.com/JonathanPorta"},
+  "homepage": "https://github.com/JonathanPorta/ai-skills/tree/main/skills/inspect-opendesign",
+  "compat": {"agentSkills": [{"path": "./SKILL.md"}]},
+  "od": {
+    "kind": "skill",
+    "taskKind": "tune-collab",
+    "mode": "export",
+    "context": {"skills": [{"path": "./SKILL.md"}]},
+    "capabilities": ["prompt:inject"]
+  }
+}
