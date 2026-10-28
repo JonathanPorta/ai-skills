@@ -4,6 +4,12 @@ on:
   push:
   pull_request:
 
+# One run per pull request (or ref): a newer commit cancels the run still in
+# flight for the same PR, so superseded checks stop spending runner minutes.
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
