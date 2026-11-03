@@ -40,11 +40,17 @@ DEFAULT_NOTE = 'Issues ✓ means linked, not closed.'
 LEGEND_ANCHOR = 'Child nodes show work and evidence.'
 REFRESH = '''## Refresh
 
-Edit `{slug}-project-state.json`, then from this directory run the `tracker` skill renderer:
+The renderer is the `tracker` skill from [ai-skills](https://github.com/JonathanPorta/ai-skills/tree/main/skills/tracker), installed once at `~/.claude/skills/tracker`:
 
 ```sh
-python3 "$TRACKER_SKILL/scripts/render_tracker.py" --png     # HTML, SVG and PNG (the PNG needs Inkscape)
-python3 "$TRACKER_SKILL/scripts/render_tracker.py" --check   # confirm the outputs match the JSON
+ln -s ~/devel/portaj/ai-skills/skills/tracker ~/.claude/skills/tracker   # once, after cloning ai-skills beside the other repositories
+```
+
+Edit `{slug}-project-state.json`, then from this directory:
+
+```sh
+python3 ~/.claude/skills/tracker/scripts/render_tracker.py --png     # HTML, SVG and PNG (the PNG needs Inkscape)
+python3 ~/.claude/skills/tracker/scripts/render_tracker.py --check   # confirm the outputs match the JSON
 ```
 
 Or run `/tracker` from the project repository. Commit the tracker, then rebuild TrackerHub (`python3 Projects/TrackerHub/build.py`) so it appears in the combined viewer.
