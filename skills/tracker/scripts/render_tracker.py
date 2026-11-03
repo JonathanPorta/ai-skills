@@ -332,22 +332,24 @@ def render(state, config, template_dir=TEMPLATES, state_path=None):
             'hatch': hatch,
             '@issues_chip': derived['@issues_chip'],
         }
-        rendered = TOKEN.sub(lambda m: html.escape(values[m[1]], quote=False) if m[1] == '@issues_chip' else values[m[1]], body)
+        rendered = TOKEN.sub(lambda m: html.escape(values[m[1]], quote=True) if m[1] == '@issues_chip' else values[m[1]], body)
         if stage == 'issues' and state['workstreams'][wid]['github_issues']:
             rendered = link('issue', wid, rendered)
         return rendered
 
     def substitute(match):
+        # Every value is user-controlled and may land in text or an attribute;
+        # escape quotes as well as markup in all contexts.
         name = match[1]
         value = derived[name] if name.startswith('@') else lookup(state, name)
-        return html.escape(value, quote=name.startswith(('@evidence_', '@issue_')))
+        return html.escape(value, quote=True)
 
     graph, growth = graph_template(state, template_dir)
     derived.update({'@height': format(3980 + growth, 'g'), '@center_shift': format(growth / 2, 'g'), '@footer_shift': format(growth, 'g')})
     svg_template = (template_dir / 'mindmap.svg.template').read_text(encoding='utf-8').replace('{{@graph}}', graph)
     svg = TOKEN.sub(substitute, WORKSTREAM_EVIDENCE_BLOCK.sub(workstream_evidence_block, TASK_LINK_BLOCK.sub(task_link_block, STAGE_BLOCK.sub(stage_block, svg_template))))
     web_template = (template_dir / 'mindmap.html.template').read_text(encoding='utf-8')
-    options = ''.join(f'<option value="{wid}">{wid} · {html.escape(ws["title"])}</option>' for wid, ws in ordered_workstreams(state))
+    options = ''.join(f'<option value="{wid}">{wid} · {html.escape(ws["title"], quote=True)}</option>' for wid, ws in ordered_workstreams(state))
     has_links = any(ws.get('evidence_url') or ws['github_issues'] or any(t.get('evidence_url') or t['github_issues'] for t in ws['tasks'].values())
                     for ws in state['workstreams'].values())
     web_template = EVIDENCE_LINK_BLOCK.sub(lambda m: m[1] if has_links else '', web_template)
@@ -407,7 +409,9 @@ def main(argv=None):
                      or (output_dir / (stem + suffix)).read_bytes() != content.encode('utf-8')]
             if stale:
                 raise ValueError('Generated files differ: ' + ', '.join(stale))
-            print('HTML and SVG match JSON and templates byte for byte.')
+            print('HTML and SVG match JSON and templates byte for byte.'
+                  + (' The PNG is not verified by --check; re-render with --png before publishing.'
+                     if (output_dir / (stem + '.png')).exists() else ''))
         else:
             output_dir.mkdir(parents=True, exist_ok=True)
             for suffix, content in rendered.items():

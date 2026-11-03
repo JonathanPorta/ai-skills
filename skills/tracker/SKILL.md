@@ -100,9 +100,15 @@ grouped by repository, each workstream's `repository` field naming its repo.
 5. **Update `README.md`** in the tracker directory: the `**Snapshot: <date>.**`
    paragraph, the "Next" line and the workstream table must agree with the map.
 
-6. **Finish.** Renders (PNG if Inkscape is present), verifies with `--check`,
-   rebuilds TrackerHub, commits, and — with operator authority for the notes
-   repository — pushes and opens the PR:
+6. **Finish.** Renders, verifies with `--check`, rebuilds TrackerHub, commits,
+   and — with operator authority for the notes repository — pushes and opens
+   the PR. It refuses to run anywhere but a worktree `tracker-begin.sh`
+   recorded; when the hub exists it requires the work-vault sibling and a
+   passing hub build before anything is pushed; and it re-renders the PNG with
+   Inkscape or refuses to ship one (no Inkscape and a PNG or a README reference
+   to one is an error — the image must never contradict the state). After a
+   push it removes only the worktrees it created, only if they are clean;
+   `--keep` skips that.
    ```bash
    scripts/tracker-finish.sh --tracker-dir "$TRACKER_DIR" [--title "docs: ..."] [--no-push]
    ```

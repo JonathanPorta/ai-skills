@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -101,6 +102,16 @@ class RenderTests(TrackerFixture):
         with self.assertRaisesRegex(ValueError, "config.slug is required"):
             render_tracker.tracker_slug(config, self.tmp / "state.json")
 
+    def test_project_name_cannot_inject_attributes(self):
+        self.config["project"] = 'Demo" onmouseover="alert(1)" x="'
+        html = render_tracker.render(self.state, self.config, state_path=self.state_path)[".html"]
+        self.assertNotIn('onmouseover="alert(1)"', html)
+        self.assertIn('aria-label="Zoomable Demo&quot; onmouseover=&quot;alert(1)&quot; x=&quot; mind map"', html)
+        self.assertIn("<h1>Demo&quot; onmouseover=&quot;alert(1)&quot; x=&quot; project mind map</h1>", html)
+        self.state["workstreams"]["01"]["title"] = 'Plain "quoted" title'
+        html = render_tracker.render(self.state, self.config, state_path=self.state_path)[".html"]
+        self.assertIn("01 · Plain &quot;quoted&quot; title</option>", html)
+
     def test_text_is_escaped_not_markup(self):
         self.state["workstreams"]["01"]["title"] = 'Foundation <script>alert(1)</script> & "quotes"'
         svg = render_tracker.render(self.state, self.config, state_path=self.state_path)[".svg"]
@@ -189,6 +200,198 @@ class ScaffoldTests(TrackerFixture):
                              "--repository", "a/b", "--commit", SHA, "--date", "2026-11-03").returncode, 1)
         self.assertEqual(run(NEW, "--tracker-dir", str(self.tmp / "new"), "--project", "X", "--slug", "x",
                              "--repository", "a/b", "--commit", "abc", "--date", "2026-11-03").returncode, 1)
+
+
+HUB_STUB = """#!/usr/bin/env python3
+import json, pathlib, sys
+root = pathlib.Path(__file__).resolve().parents[2]
+config = json.loads((root / 'Projects' / 'TrackerHub' / 'config.json').read_text())
+work = (root / 'Projects' / 'TrackerHub' / config['repositories'][1]['root']).resolve()
+if not work.is_dir():
+    print('Tracker build failed: missing work vault ' + str(work), file=sys.stderr)
+    raise SystemExit(1)
+maps = sorted(str(p.relative_to(root)) for p in root.rglob('*mindmap.html') if 'Tracker' in p.parts)
+catalog = json.dumps({'maps': maps}, indent=1) + '\\n'
+if '--check' in sys.argv:
+    if (root / 'Projects' / 'TrackerHub' / 'catalog.json').read_text() != catalog:
+        raise SystemExit('stale')
+    print('Checked %d maps' % len(maps))
+else:
+    (root / 'Projects' / 'TrackerHub' / 'catalog.json').write_text(catalog)
+    (root / 'tracker-mindmaps.html').write_text('<!doctype html>' + catalog)
+    print('Bundled %d maps' % len(maps))
+"""
+HUB_CONFIG = {"schema_version": 1, "repositories": [
+    {"repository": "X/notes-personal", "root": "../..", "group": "personal"},
+    {"repository": "X/notes-work", "root": "../../../Work", "group": "work"}]}
+BEGIN = SKILL / "scripts" / "tracker-begin.sh"
+FINISH = SKILL / "scripts" / "tracker-finish.sh"
+
+
+def git(cwd: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+
+def new_repo(path: Path) -> None:
+    path.mkdir(parents=True)
+    git(path, "init", "-q", "-b", "main", ".")
+    git(path, "config", "user.email", "t@example.invalid")
+    git(path, "config", "user.name", "Test")
+
+
+class WorkflowFixture(unittest.TestCase):
+    """A disposable notes vault (with origin and a stub TrackerHub) and a work vault."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="tracker-wf-")).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.origin = self.tmp / "origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(self.origin)], check=True)
+        self.notes = self.tmp / "notes"
+        new_repo(self.notes)
+        hub = self.notes / "Projects" / "TrackerHub"
+        hub.mkdir(parents=True)
+        (hub / "build.py").write_text(HUB_STUB)
+        (hub / "config.json").write_text(json.dumps(HUB_CONFIG))
+        self.tracker_rel = Path("Projects") / "Example" / "Tracker"
+        shutil.copytree(EXAMPLE, self.notes / self.tracker_rel)
+        (self.notes / self.tracker_rel / "README.md").write_text("# Example\n\n**Snapshot: 2026-11-03.**\n")
+        git(self.notes, "add", "-A")
+        git(self.notes, "commit", "-qm", "seed")
+        git(self.notes, "remote", "add", "origin", str(self.origin))
+        git(self.notes, "push", "-q", "-u", "origin", "main")
+        git(self.notes, "remote", "set-head", "origin", "main")
+        self.work = self.tmp / "work"
+        new_repo(self.work)
+        (self.work / "note.md").write_text("work\n")
+        git(self.work, "add", "-A")
+        git(self.work, "commit", "-qm", "seed")
+        self.scratch = self.tmp / "scratch"
+        self.env = dict(os.environ, TRACKER_NOTES_REPO=str(self.notes), TRACKER_WORK_REPO=str(self.work),
+                        AI_SCRATCH_ROOT=str(self.scratch), TRACKER_NO_PNG="1",
+                        GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="t@example.invalid",
+                        GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="t@example.invalid")
+
+    def run_script(self, script: Path, *args: str, env_extra: dict | None = None) -> subprocess.CompletedProcess:
+        env = dict(self.env)
+        if env_extra:
+            env.update(env_extra)
+        return subprocess.run(["bash", str(script), *args], capture_output=True, text=True, timeout=120, env=env)
+
+    def begin(self) -> dict:
+        result = self.run_script(BEGIN, "--project", "Example", "--date", "2026-11-03")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+
+    def change_state(self, tracker_dir: Path) -> None:
+        state_path = tracker_dir / "example-project-state.json"
+        state = json.loads(state_path.read_text())
+        state["workstreams"]["02"]["stages"]["testing"] = "complete"
+        state_path.write_text(json.dumps(state, ensure_ascii=False))
+
+
+class WorkflowTests(WorkflowFixture):
+    def test_begin_and_finish_commit_tracker_then_hub(self):
+        out = self.begin()
+        worktree, tracker_dir = Path(out["TRACKER_WORKTREE"]), Path(out["TRACKER_DIR"])
+        self.assertEqual(out["TRACKER_EXISTS"], "1")
+        self.assertTrue(Path(out["TRACKER_WORK_SIBLING"]).is_dir())
+        self.assertTrue(str(Path(out["TRACKER_WORK_SIBLING"])).startswith(str(self.scratch)))
+        self.change_state(tracker_dir)
+        result = self.run_script(FINISH, "--tracker-dir", str(tracker_dir), "--no-push")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = git(worktree, "log", "--format=%s", "-3")
+        self.assertEqual(log.splitlines(), ["docs: Rebuild TrackerHub With The Example Tracker",
+                                            "docs: Update The Example Project Tracker", "seed"])
+        self.assertIn("HUB_COMMIT=", result.stdout)
+        self.assertTrue(worktree.exists(), "--no-push never cleans up")
+
+    def test_finish_refuses_the_live_checkout_and_unowned_worktrees(self):
+        result = self.run_script(FINISH, "--tracker-dir", str(self.notes / self.tracker_rel), "--no-push")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("not a worktree created by tracker-begin.sh", result.stderr)
+        foreign = self.tmp / "foreign"
+        git(self.notes, "worktree", "add", "-q", "-b", "jp/d/foreign", str(foreign))
+        result = self.run_script(FINISH, "--tracker-dir", str(foreign / self.tracker_rel), "--no-push")
+        self.assertEqual(result.returncode, 2)
+        self.assertTrue((foreign / self.tracker_rel).exists())
+
+    def test_begin_refuses_a_hub_root_outside_the_task_and_a_missing_work_vault(self):
+        hub = self.notes / "Projects" / "TrackerHub"
+        escaping = dict(HUB_CONFIG)
+        escaping["repositories"] = [HUB_CONFIG["repositories"][0],
+                                    {"repository": "X/notes-work", "root": "../../../../../outside", "group": "work"}]
+        (hub / "config.json").write_text(json.dumps(escaping))
+        git(self.notes, "commit", "-qam", "escape")
+        git(self.notes, "push", "-q")
+        result = self.run_script(BEGIN, "--project", "Example", "--date", "2026-11-03")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("outside the task directory", result.stderr)
+        self.assertFalse((self.tmp / "outside").exists())
+        (hub / "config.json").write_text(json.dumps(HUB_CONFIG))
+        git(self.notes, "commit", "-qam", "restore")
+        git(self.notes, "push", "-q")
+        result = self.run_script(BEGIN, "--project", "Example", "--date", "2026-11-04",
+                                 env_extra={"TRACKER_WORK_REPO": str(self.tmp / "nowhere")})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("work vault is not at", result.stderr)
+
+    def test_finish_requires_the_hub_sibling_before_committing(self):
+        out = self.begin()
+        worktree, tracker_dir = Path(out["TRACKER_WORKTREE"]), Path(out["TRACKER_DIR"])
+        self.change_state(tracker_dir)
+        git(self.work, "worktree", "remove", "--force", out["TRACKER_WORK_SIBLING"])
+        result = self.run_script(FINISH, "--tracker-dir", str(tracker_dir), "--no-push")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("work-vault sibling is missing", result.stderr)
+        self.assertEqual(git(worktree, "log", "--format=%s", "-1"), "seed")
+        self.assertIn("example-project-state.json", git(worktree, "status", "--porcelain"))
+
+    def test_finish_refuses_a_stale_png_and_a_dangling_png_reference(self):
+        out = self.begin()
+        worktree, tracker_dir = Path(out["TRACKER_WORKTREE"]), Path(out["TRACKER_DIR"])
+        self.change_state(tracker_dir)
+        (tracker_dir / "example-project-mindmap.png").write_bytes(b"\x89PNG stale")
+        result = self.run_script(FINISH, "--tracker-dir", str(tracker_dir), "--no-push")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("would ship stale", result.stderr)
+        self.assertEqual(git(worktree, "log", "--format=%s", "-1"), "seed")
+        (tracker_dir / "example-project-mindmap.png").unlink()
+        (tracker_dir / "README.md").write_text("# Example\n\n**Snapshot: 2026-11-03.**\n\n![map](example-project-mindmap.png)\n")
+        result = self.run_script(FINISH, "--tracker-dir", str(tracker_dir), "--no-push")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("references example-project-mindmap.png", result.stderr)
+        self.assertEqual(git(worktree, "log", "--format=%s", "-1"), "seed")
+
+    def test_cleanup_keeps_dirty_worktrees_and_removes_clean_owned_ones(self):
+        out = self.begin()
+        worktree, tracker_dir = Path(out["TRACKER_WORKTREE"]), Path(out["TRACKER_DIR"])
+        sibling = Path(out["TRACKER_WORK_SIBLING"])
+        self.change_state(tracker_dir)
+        stray = worktree / "unrelated-note.md"
+        stray.write_text("do not lose me\n")
+        result = self.run_script(FINISH, "--tracker-dir", str(tracker_dir), "--no-pr")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(stray.exists(), "an untracked file must survive cleanup")
+        self.assertIn("keeping", result.stderr)
+        self.assertIn("jp/d/example-tracker-20261103", git(self.notes, "branch", "-r", "--list", "origin/*"))
+        stray.unlink()
+        result = self.run_script(FINISH, "--tracker-dir", str(tracker_dir), "--no-pr")
+        self.assertEqual(result.returncode, 1, "nothing new to commit on a resumed clean run")
+        self.assertTrue(worktree.exists())
+
+    def test_cleanup_removes_only_owned_clean_worktrees(self):
+        out = self.begin()
+        worktree, tracker_dir = Path(out["TRACKER_WORKTREE"]), Path(out["TRACKER_DIR"])
+        sibling = Path(out["TRACKER_WORK_SIBLING"])
+        self.change_state(tracker_dir)
+        result = self.run_script(FINISH, "--tracker-dir", str(tracker_dir), "--no-pr")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(worktree.exists())
+        self.assertFalse(sibling.exists())
+        self.assertFalse((self.scratch / "tracker-example-20261103").exists())
+        self.assertIn("jp/d/example-tracker-20261103", git(self.notes, "branch", "--list"))
+        self.assertTrue((self.notes / self.tracker_rel).exists(), "the live checkout is untouched")
 
 
 class ScriptSyntaxTests(unittest.TestCase):
