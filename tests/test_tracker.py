@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILL = ROOT / "skills" / "tracker"
 RENDER = SKILL / "scripts" / "render_tracker.py"
 NEW = SKILL / "scripts" / "new_tracker.py"
+MIGRATE = SKILL / "scripts" / "migrate_tracker.py"
 EXAMPLE = SKILL / "assets" / "example"
 SHA = "0123abcdef0123abcdef0123abcdef0123abcdef"
 
@@ -423,6 +424,102 @@ class WorkflowTests(WorkflowFixture):
         self.assertFalse((self.scratch / "tracker-example-20261103").exists())
         self.assertIn("jp/d/example-tracker-20261103", git(self.notes, "branch", "--list"))
         self.assertTrue((self.notes / self.tracker_rel).exists(), "the live checkout is untouched")
+
+
+class MigrationTests(unittest.TestCase):
+    """Round-trip: an old-style tracker built from the example must migrate back to it."""
+
+    PANELS = {"01": "alpha", "02": "beta", "03": "gamma"}
+    CALLOUTS = {"01": "one", "02": "two", "03": "three", "04": "four", "05": "five", "06": "six"}
+    GATES = {"01": "gate-one", "02": "gate-two", "03": "gate-three", "04": "gate-four", "05": "gate-five"}
+    LITERALS = {
+        "project.heading": "EXAMPLE / THE WHOLE PROJECT", "project.tagline": "SCOPE  /  BUILD  /  SHIP",
+        "project.center_title": "EXAMPLE", "project.center_repository": "example/project",
+        "project.center_line_1": "line one", "project.center_line_2": "line two",
+        "project.center_line_3": "line three", "project.center_line_4": "line four",
+        "project.acceptance_heading": "MILESTONES / EVIDENCE", "project.later_scope": "Later: more.",
+        "project.excluded_scope": "Excluded: less.",
+    }
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="tracker-mig-")).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.dir = self.tmp / "Projects" / "Example" / "Tracker"
+        (self.dir / "templates").mkdir(parents=True)
+        self.expected = json.loads((EXAMPLE / "example-project-state.json").read_text(encoding="utf-8"))
+        old = json.loads(json.dumps(self.expected))
+        old["schema_version"] = 1
+        project = old["project"]
+        for key in list(self.LITERALS) + ["project.subtitle"]:
+            project.pop(key.split(".")[1], None)
+        project["context_panels"] = {self.PANELS[k]: v for k, v in project["context_panels"].items()}
+        project["callouts"] = {self.CALLOUTS[k]: v for k, v in project["callouts"].items()}
+        old["acceptance"] = {self.GATES[k]: v for k, v in old["acceptance"].items()}
+        for ws in old["workstreams"].values():
+            ws["stages"] = {("planning" if k == "issues" else k): v for k, v in ws["stages"].items()}
+            ws["github_issues"] = [i["url"] for i in ws["github_issues"]]
+            for task in ws["tasks"].values():
+                if task["color_stage"] == "issues":
+                    task["color_stage"] = "planning"
+                task["github_issues"] = [i["url"] for i in task["github_issues"]]
+                task["evidence_note"] = "carried note for " + task["title"]
+        (self.dir / "example-project-state.json").write_text(json.dumps(old, ensure_ascii=False), encoding="utf-8")
+        (self.dir / "config.json").write_text('{"workstream_count": 2}', encoding="utf-8")
+        template = (SKILL / "assets" / "templates" / "mindmap.svg.template").read_text(encoding="utf-8")
+        for name, literal in self.LITERALS.items():
+            template = template.replace("{{" + name + "}}", literal)
+        template = template.replace("{{project.subtitle}} · {{@snapshot_caption}}", "Scope → ship · {{@snapshot_caption}}")
+        for k, v in self.PANELS.items():
+            template = template.replace("{{project.context_panels." + k + ".", "{{project.context_panels." + v + ".")
+        for k, v in self.CALLOUTS.items():
+            template = template.replace("{{project.callouts." + k + ".", "{{project.callouts." + v + ".")
+        for k, v in self.GATES.items():
+            template = template.replace("{{acceptance." + k + ".", "{{acceptance." + v + ".")
+        template = template.replace("{{@issues_name}}", "Planning").replace("{{@issues_note}}", "Planning ✓ means a ticket exists.")
+        (self.dir / "templates" / "mindmap.svg.template").write_text(template, encoding="utf-8")
+        (self.dir / "render_tracker.py").write_text(
+            "STAGES = ('scoping', 'discovery', 'planning', 'implementation', 'testing', 'delivery')\n"
+            "CAPTION = {'@snapshot_caption': f'Status snapshot: {month} {day.day} · example main {ref}'}\n", encoding="utf-8")
+        (self.dir / "test_tracker.py").write_text("# old tests\n", encoding="utf-8")
+        (self.dir / "config.schema.json").write_text("{}", encoding="utf-8")
+        (self.dir / "README.md").write_text("# Example\n\n**Snapshot: 2026-11-03.**\n\n## Refresh\n\nold instructions\n", encoding="utf-8")
+
+    def test_round_trip_recovers_the_example_state(self):
+        result = run(MIGRATE, "--tracker-dir", str(self.dir), "--project", "Example", "--slug", "example")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        state = json.loads((self.dir / "example-project-state.json").read_text(encoding="utf-8"))
+        config = json.loads((self.dir / "config.json").read_text(encoding="utf-8"))
+        self.assertEqual(config, {"workstream_count": 2, "project": "Example", "slug": "example", "ref_label": "example main",
+                                  "issues_label": "Planning", "issues_note": "Planning ✓ means a ticket exists."})
+        self.assertEqual(state["schema_version"], 2)
+        for name, literal in self.LITERALS.items():
+            self.assertEqual(state["project"][name.split(".")[1]], literal)
+        self.assertEqual(state["project"]["subtitle"], "Scope → ship")
+        self.assertEqual(state["project"]["context_panels"], self.expected["project"]["context_panels"])
+        self.assertEqual(state["project"]["callouts"], self.expected["project"]["callouts"])
+        self.assertEqual(state["acceptance"], self.expected["acceptance"])
+        self.assertEqual(state["workstreams"], self.expected["workstreams"])
+        self.assertEqual(sorted(p.name for p in self.dir.iterdir()),
+                         ["README.md", "config.json", "example-project-mindmap.html", "example-project-mindmap.svg",
+                          "example-project-state.json"])
+        readme = (self.dir / "README.md").read_text(encoding="utf-8")
+        self.assertIn("## Evidence notes carried from the previous renderer", readme)
+        self.assertIn("carried note for Build", readme)
+        self.assertNotIn("old instructions", readme)
+        self.assertIn("render_tracker.py", readme)
+        check = run(RENDER, "--tracker-dir", str(self.dir), "--check")
+        self.assertEqual(check.returncode, 0, check.stderr)
+
+    def test_dry_run_writes_nothing_and_missing_text_is_an_error(self):
+        before = sorted(p.name for p in self.dir.rglob("*"))
+        result = run(MIGRATE, "--tracker-dir", str(self.dir), "--project", "Example", "--slug", "example", "--dry-run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sorted(p.name for p in self.dir.rglob("*")), before)
+        template = self.dir / "templates" / "mindmap.svg.template"
+        template.write_text(template.read_text(encoding="utf-8").replace('y="85"', 'y="86"'), encoding="utf-8")
+        result = run(MIGRATE, "--tracker-dir", str(self.dir), "--project", "Example", "--slug", "example", "--dry-run")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("cannot recover project.heading", result.stderr)
 
 
 class ScriptSyntaxTests(unittest.TestCase):
