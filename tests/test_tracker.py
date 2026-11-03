@@ -482,7 +482,9 @@ class MigrationTests(unittest.TestCase):
             "CAPTION = {'@snapshot_caption': f'Status snapshot: {month} {day.day} · example main {ref}'}\n", encoding="utf-8")
         (self.dir / "test_tracker.py").write_text("# old tests\n", encoding="utf-8")
         (self.dir / "config.schema.json").write_text("{}", encoding="utf-8")
-        (self.dir / "README.md").write_text("# Example\n\n**Snapshot: 2026-11-03.**\n\n## Refresh\n\nold instructions\n", encoding="utf-8")
+        (self.dir / "README.md").write_text(
+            "# Example\n\n**Snapshot: 2026-11-03.**\n\n## Refresh\n\nold instructions\n\n"
+            "## Evidence limits\n\nKeep this section.\n", encoding="utf-8")
 
     def test_round_trip_recovers_the_example_state(self):
         result = run(MIGRATE, "--tracker-dir", str(self.dir), "--project", "Example", "--slug", "example")
@@ -506,6 +508,8 @@ class MigrationTests(unittest.TestCase):
         self.assertIn("## Evidence notes carried from the previous renderer", readme)
         self.assertIn("carried note for Build", readme)
         self.assertNotIn("old instructions", readme)
+        self.assertIn("## Evidence limits\n\nKeep this section.", readme, "sections after the old refresh block survive")
+        self.assertLess(readme.index("## Evidence limits"), readme.index("## Evidence notes carried"))
         self.assertIn("render_tracker.py", readme)
         check = run(RENDER, "--tracker-dir", str(self.dir), "--check")
         self.assertEqual(check.returncode, 0, check.stderr)
@@ -520,6 +524,24 @@ class MigrationTests(unittest.TestCase):
         result = run(MIGRATE, "--tracker-dir", str(self.dir), "--project", "Example", "--slug", "example", "--dry-run")
         self.assertEqual(result.returncode, 1)
         self.assertIn("cannot recover project.heading", result.stderr)
+
+    def test_invalid_migrated_state_fails_before_anything_is_deleted(self):
+        state_path = self.dir / "example-project-state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["workstreams"]["01"]["tasks"]["t1"]["github_issues"] = ["https://github.com/example/project/pull/1"]
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        before = sorted(p.name for p in self.dir.rglob("*"))
+        result = run(MIGRATE, "--tracker-dir", str(self.dir), "--project", "Example", "--slug", "example")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not a GitHub issue URL", result.stderr)
+        self.assertEqual(sorted(p.name for p in self.dir.rglob("*")), before)
+        state["workstreams"]["01"]["tasks"]["t1"]["github_issues"] = []
+        state["workstreams"]["01"]["stages"]["planning"] = "done"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        result = run(MIGRATE, "--tracker-dir", str(self.dir), "--project", "Example", "--slug", "example")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("expected complete, partial or pending", result.stderr)
+        self.assertEqual(sorted(p.name for p in self.dir.rglob("*")), before)
 
 
 class ScriptSyntaxTests(unittest.TestCase):

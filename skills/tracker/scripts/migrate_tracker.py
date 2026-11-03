@@ -119,6 +119,23 @@ def convert_issues(value, path):
     return out
 
 
+REFRESH_HEADING = re.compile(r'^## (?:Refresh|Update and reproduce|Regenerate|Maintain this snapshot|Reproduce)\b[^\n]*\n', re.M)
+NEXT_HEADING = re.compile(r'^## ', re.M)
+
+
+def rewrite_readme(text, slug, notes):
+    """Replace only the old refresh section; keep every other section in place."""
+    m = REFRESH_HEADING.search(text)
+    if m:
+        after = NEXT_HEADING.search(text, m.end())
+        end = after.start() if after else len(text)
+        text = text[:m.start()] + text[end:]
+    text = text.rstrip('\n') + '\n\n'
+    if notes:
+        text += '## Evidence notes carried from the previous renderer\n\n' + '\n'.join(notes) + '\n\n'
+    return text + REFRESH.format(slug=slug)
+
+
 def migrate(tracker_dir, project_name, slug, dry_run=False):
     tracker_dir = Path(tracker_dir)
     state_path = tracker_dir / f'{slug}-project-state.json'
@@ -227,6 +244,10 @@ def migrate(tracker_dir, project_name, slug, dry_run=False):
         config['issues_label'] = issues_label
     if issues_note:
         config['issues_note'] = issues_note
+    # Validate before anything is deleted: the migrated state must render.
+    sys.path.insert(0, str(SKILL_ROOT / 'scripts'))
+    import render_tracker  # noqa: E402
+    render_tracker.render(new_state, config, state_path=state_path)
     if dry_run:
         return new_state, config, notes
 
@@ -239,12 +260,7 @@ def migrate(tracker_dir, project_name, slug, dry_run=False):
         shutil.rmtree(tracker_dir / sub, ignore_errors=True)
     readme = tracker_dir / 'README.md'
     text = readme.read_text(encoding='utf-8') if readme.exists() else f'# {project_name} project tracker\n'
-    m = re.search(r'^## (Refresh|Update and reproduce|Regenerate|Maintain this snapshot|Reproduce)\b.*', text, re.M | re.S)
-    text = (text[:m.start()] if m else text.rstrip('\n') + '\n\n')
-    if notes:
-        text += '## Evidence notes carried from the previous renderer\n\n' + '\n'.join(notes) + '\n\n'
-    text += REFRESH.format(slug=slug)
-    readme.write_text(text, encoding='utf-8')
+    readme.write_text(rewrite_readme(text, slug, notes), encoding='utf-8')
     result = subprocess.run([sys.executable, str(RENDER), '--tracker-dir', str(tracker_dir)], capture_output=True, text=True)
     if result.returncode:
         raise ValueError('render failed after migration: ' + result.stderr.strip())
