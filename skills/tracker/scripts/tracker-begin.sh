@@ -70,20 +70,33 @@ fi
 hub="$personal/Projects/TrackerHub/build.py"
 sibling=""
 if [ -f "$hub" ]; then
+  # Containment is checked on the resolved filesystem path: the nearest existing
+  # ancestor is realpath'd so a symlinked parent cannot point the worktree (and
+  # the later cleanup) outside the task directory.
   sibling="$(python3 - "$personal/Projects/TrackerHub/config.json" "$task" <<'PY'
 import json, os, sys
-config, task = sys.argv[1], sys.argv[2]
+config, task = sys.argv[1], os.path.realpath(sys.argv[2])
 hub_dir = os.path.join(task, 'notes-personal', 'Projects', 'TrackerHub')
+target = None
 for repo in json.load(open(config))['repositories']:
     if repo['repository'].endswith('/notes-work'):
-        print(os.path.normpath(os.path.join(hub_dir, repo['root'])))
+        target = os.path.normpath(os.path.join(hub_dir, repo['root']))
         break
+if target is None:
+    sys.exit(0)
+existing = target
+while not os.path.exists(existing):
+    existing = os.path.dirname(existing)
+resolved = os.path.realpath(existing)
+if resolved != task and not resolved.startswith(task + os.sep):
+    print('OUTSIDE ' + target)
+    sys.exit(0)
+print(target)
 PY
 )"
   [ -n "$sibling" ] || { printf 'TrackerHub config names no notes-work repository\n' >&2; exit 2; }
   case "$sibling" in
-    "$task"/*) ;;
-    *) printf 'TrackerHub config resolves the work vault to %s, outside the task directory; refusing\n' "$sibling" >&2; exit 2 ;;
+    OUTSIDE\ *) printf 'TrackerHub config resolves the work vault to %s, outside the task directory; refusing\n' "${sibling#OUTSIDE }" >&2; exit 2 ;;
   esac
   if [ ! -d "$work/.git" ] && [ ! -f "$work/.git" ]; then
     printf 'TrackerHub exists but the work vault is not at %s; set TRACKER_WORK_REPO or --work\n' "$work" >&2

@@ -162,8 +162,14 @@ fi
 # Cleanup is opt-out, post-push only, owned worktrees only, clean only, never forced.
 if [ "$keep" -eq 0 ] && [ "$push" -eq 1 ]; then
   kept=0
+  task_real="$(cd "$task" && pwd -P)"
   while IFS= read -r wt; do
     [ -d "$wt" ] || continue
+    wt_real="$(cd "$wt" && pwd -P)"
+    case "$wt_real" in
+      "$task_real"/*) ;;
+      *) printf 'keeping %s: it resolves outside the task directory\n' "$wt" >&2; kept=1; continue ;;
+    esac
     if [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then
       printf 'keeping %s: it has uncommitted or untracked changes\n' "$wt" >&2
       kept=1

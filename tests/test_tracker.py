@@ -336,6 +336,37 @@ class WorkflowTests(WorkflowFixture):
         self.assertEqual(result.returncode, 2)
         self.assertIn("work vault is not at", result.stderr)
 
+    def test_begin_refuses_a_symlinked_parent_that_escapes_the_task(self):
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        hub = self.notes / "Projects" / "TrackerHub"
+        (hub / "Link").symlink_to(outside, target_is_directory=True)
+        linked = dict(HUB_CONFIG)
+        linked["repositories"] = [HUB_CONFIG["repositories"][0],
+                                  {"repository": "X/notes-work", "root": "Link/Work", "group": "work"}]
+        (hub / "config.json").write_text(json.dumps(linked))
+        git(self.notes, "add", "-A")
+        git(self.notes, "commit", "-qm", "symlink escape")
+        git(self.notes, "push", "-q")
+        result = self.run_script(BEGIN, "--project", "Example", "--date", "2026-11-03")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("outside the task directory", result.stderr)
+        self.assertEqual(sorted(p.name for p in outside.iterdir()), [], "nothing was created at the symlink target")
+        self.assertNotIn("Work", git(self.work, "worktree", "list"))
+
+    def test_cleanup_never_removes_a_worktree_that_resolves_outside_the_task(self):
+        out = self.begin()
+        worktree, tracker_dir = Path(out["TRACKER_WORKTREE"]), Path(out["TRACKER_DIR"])
+        external = self.tmp / "external-worktree"
+        git(self.notes, "worktree", "add", "-q", "--detach", str(external), "HEAD")
+        marker = Path(out["TRACKER_WORKTREE"]).parent / ".tracker-worktrees"
+        marker.write_text(marker.read_text() + str(external) + "\n")
+        self.change_state(tracker_dir)
+        result = self.run_script(FINISH, "--tracker-dir", str(tracker_dir), "--no-pr")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(external.exists(), "an external path listed in the marker must survive")
+        self.assertIn("resolves outside the task directory", result.stderr)
+
     def test_finish_requires_the_hub_sibling_before_committing(self):
         out = self.begin()
         worktree, tracker_dir = Path(out["TRACKER_WORKTREE"]), Path(out["TRACKER_DIR"])
