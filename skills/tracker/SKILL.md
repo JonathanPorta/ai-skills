@@ -135,6 +135,20 @@ unless the operator has authorised pushes and PRs for the notes repo in this
 session (or a standing grant such as `PRRQ_PUBLICATION=push-allowed` applies).
 Merging is the operator's, through their review gate.
 
+## Migrating a tracker that still carries its own renderer
+
+```bash
+scripts/migrate_tracker.py --tracker-dir "$TRACKER_DIR" --project "<Name>" --slug <slug> [--dry-run]
+```
+
+Handles schema 1 (`planning` stage, named panel keys, issue URLs as strings,
+task `evidence_note`) and schema-2 variants with renamed fields or a renamed
+third stage. Project-level text that the old tracker kept in its own SVG
+template is recovered by coordinate against the shared template; nothing is
+invented — a field that cannot be recovered is an error. Dropped per-task
+notes and extra source URLs are appended to the README so no evidence is lost.
+Review the diff, then finish as usual.
+
 ## Renderer reference
 
 ```bash

@@ -18,6 +18,9 @@ directories hold only state and rendered output, and every map reads the same wa
 - `scripts/render_tracker.py` — validates `<slug>-project-state.json` + `config.json`
   and renders HTML, SVG and (with Inkscape) PNG; `--check` proves outputs match.
 - `scripts/new_tracker.py` — scaffolds a tracker directory with `TODO` placeholders.
+- `scripts/migrate_tracker.py` — converts a tracker that carries its own renderer
+  (schema 1, or schema 2 with renamed fields/stages) onto the shared one, recovering
+  template-held text by coordinate and carrying dropped notes into the README.
 - `scripts/tracker-begin.sh` — scratch worktrees for the notes and work vaults and a
   `jp/d/<slug>-tracker-<date>` branch; never touches the live vault. Records every
   worktree it creates in `<task>/.tracker-worktrees` and refuses a hub config whose
