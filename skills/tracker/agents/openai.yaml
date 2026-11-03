@@ -1,0 +1,8 @@
+interface:
+  display_name: Tracker
+  short_description: Keep the project status mind map current in the notes repo
+  default_prompt: Use $tracker to add or refresh the tracker for this project in my notes repository from live GitHub evidence and open the PR.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  allow_implicit_invocation: true

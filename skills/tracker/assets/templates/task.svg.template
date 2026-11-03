@@ -1,0 +1,5 @@
+{{#task_link {{@wid}} {{@tid}}}}<rect x="0" y="0" width="880" height="76" rx="12" fill="{{@task_fill.{{@wid}}.{{@tid}}}}" stroke="#CBD3DF" />
+<rect x="0" y="0" width="7" height="76" rx="3" fill="{{@task_accent.{{@wid}}.{{@tid}}}}" stroke="none" />
+<text x="22" y="30" font-size="23" fill="#202C40" font-weight="500" text-anchor="start">{{workstreams.{{@wid}}.tasks.{{@tid}}.title}}</text>
+<text x="22" y="59" font-size="19" fill="#59677A" font-weight="400" text-anchor="start">{{workstreams.{{@wid}}.tasks.{{@tid}}.description}}</text>
+<text x="862" y="28" font-size="13" fill="#59677A" font-weight="500" text-anchor="end">{{workstreams.{{@wid}}.tasks.{{@tid}}.status_label}}</text>{{/task_link}}
