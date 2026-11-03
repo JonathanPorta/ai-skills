@@ -24,6 +24,16 @@ The renderer, templates, colours and schema live in this skill
 directory and never edit rendered files by hand. `assets/example/` is a complete
 two-workstream state you can read as the reference for every field.
 
+## Installation
+
+The skill is used from its installed path, so tracker READMEs can name one
+command that works from any checkout:
+
+```bash
+ln -s ~/devel/portaj/ai-skills/skills/tracker ~/.claude/skills/tracker   # once
+python3 ~/.claude/skills/tracker/scripts/render_tracker.py --help
+```
+
 ## Invocation
 
 | Form | Does |
