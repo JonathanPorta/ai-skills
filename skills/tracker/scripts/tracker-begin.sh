@@ -108,7 +108,16 @@ PY
       exit 2
     fi
   else
-    git -C "$work" worktree add -q --detach "$sibling" HEAD
+    # The hub must verify the work vault's maps as published, not as the local
+    # checkout happens to be, so the sibling is detached at origin's default
+    # branch (falling back to the local HEAD when there is no remote).
+    work_ref="HEAD"
+    if git -C "$work" fetch -q origin 2>/dev/null; then
+      work_default="$(git -C "$work" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')"
+      work_ref="origin/${work_default:-main}"
+      git -C "$work" rev-parse -q --verify "$work_ref^{commit}" >/dev/null 2>&1 || work_ref="HEAD"
+    fi
+    git -C "$work" worktree add -q --detach "$sibling" "$work_ref"
     record "$sibling"
   fi
 fi
