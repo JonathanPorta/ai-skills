@@ -136,6 +136,22 @@ def rewrite_readme(text, slug, notes):
     return text + REFRESH.format(slug=slug)
 
 
+OLD_COMMANDS = re.compile(r'python3 (?:-m unittest[^\n]*|render_tracker\.py)')
+
+
+def stale_maintenance_headings(text):
+    """Headings of sections (other than the new Refresh) that still run the old local renderer."""
+    stale = []
+    sections = re.split(r'(?m)^(?=## )', text)
+    for section in sections:
+        heading = section.split('\n', 1)[0].strip()
+        if heading == '## Refresh' or not heading.startswith('## '):
+            continue
+        if OLD_COMMANDS.search(section):
+            stale.append(heading)
+    return stale
+
+
 def migrate(tracker_dir, project_name, slug, dry_run=False):
     tracker_dir = Path(tracker_dir)
     state_path = tracker_dir / f'{slug}-project-state.json'
@@ -260,7 +276,10 @@ def migrate(tracker_dir, project_name, slug, dry_run=False):
         shutil.rmtree(tracker_dir / sub, ignore_errors=True)
     readme = tracker_dir / 'README.md'
     text = readme.read_text(encoding='utf-8') if readme.exists() else f'# {project_name} project tracker\n'
-    readme.write_text(rewrite_readme(text, slug, notes), encoding='utf-8')
+    rewritten = rewrite_readme(text, slug, notes)
+    readme.write_text(rewritten, encoding='utf-8')
+    for heading in stale_maintenance_headings(rewritten):
+        print(f'README: the section {heading!r} still invokes the old per-directory renderer; edit it by hand', file=sys.stderr)
     result = subprocess.run([sys.executable, str(RENDER), '--tracker-dir', str(tracker_dir)], capture_output=True, text=True)
     if result.returncode:
         raise ValueError('render failed after migration: ' + result.stderr.strip())

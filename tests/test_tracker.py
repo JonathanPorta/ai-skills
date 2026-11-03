@@ -514,6 +514,18 @@ class MigrationTests(unittest.TestCase):
         check = run(RENDER, "--tracker-dir", str(self.dir), "--check")
         self.assertEqual(check.returncode, 0, check.stderr)
 
+    def test_unmatched_maintenance_section_is_reported_not_replaced(self):
+        readme = self.dir / "README.md"
+        readme.write_text(
+            "# Example\n\n**Snapshot: 2026-11-03.**\n\n## Sources and maintenance\n\nEvidence prose to keep.\n\n"
+            "```sh\npython3 render_tracker.py --png\npython3 -m unittest -v test_tracker.py\n```\n", encoding="utf-8")
+        result = run(MIGRATE, "--tracker-dir", str(self.dir), "--project", "Example", "--slug", "example")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("'## Sources and maintenance' still invokes the old per-directory renderer", result.stderr)
+        text = readme.read_text(encoding="utf-8")
+        self.assertIn("Evidence prose to keep.", text, "an unrecognised section is never replaced wholesale")
+        self.assertIn("## Refresh", text)
+
     def test_dry_run_writes_nothing_and_missing_text_is_an_error(self):
         before = sorted(p.name for p in self.dir.rglob("*"))
         result = run(MIGRATE, "--tracker-dir", str(self.dir), "--project", "Example", "--slug", "example", "--dry-run")
