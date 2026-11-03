@@ -48,8 +48,11 @@ grouped by repository, each workstream's `repository` field naming its repo.
    # prints TRACKER_BRANCH, TRACKER_WORKTREE, TRACKER_DIR, TRACKER_SLUG, TRACKER_EXISTS
    ```
    It creates `jp/d/<slug>-tracker-<date>` from `origin/main` in a scratch
-   worktree, plus a detached sibling worktree of the work vault so the hub build
-   can verify both.
+   worktree, plus a detached sibling worktree of the work vault (at the path the
+   hub's `config.json` names) so the hub build can verify both. Pass
+   `--base main` when the vault's local `main` is ahead of `origin/main` — the
+   Obsidian backup plugin does not always push — and tell the operator the
+   branch cannot be PR'd until `main` is.
 
 2. **Gather evidence before touching the state.** Pull live facts with `gh`:
    merged PRs (`gh pr list --state merged`), open PRs and issues, latest
