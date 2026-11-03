@@ -1,0 +1,207 @@
+{
+  "schema_version": 2,
+  "snapshot": {
+    "date": "2026-11-03",
+    "evidence_ref": "0123abc",
+    "extracted_from": {
+      "repository": "example/project",
+      "commit": "0123abcdef0123abcdef0123abcdef0123abcdef",
+      "path": "docs/PLAN.md"
+    }
+  },
+  "project": {
+    "context_panels": {
+      "01": {
+        "title": "WHAT IS ALREADY DONE",
+        "line_1": "01 line_1",
+        "line_2": "01 line_2",
+        "line_3": "01 line_3"
+      },
+      "02": {
+        "title": "WHAT IS STILL UNKNOWN",
+        "line_1": "02 line_1",
+        "line_2": "02 line_2",
+        "line_3": "02 line_3"
+      },
+      "03": {
+        "title": "WHAT MOVES THE PROJECT",
+        "line_1": "03 line_1",
+        "line_2": "03 line_2",
+        "line_3": "03 line_3"
+      }
+    },
+    "callouts": {
+      "01": {
+        "title": "CURRENT POSITION",
+        "line_1": "callout 01 line_1",
+        "line_2": "callout 01 line_2",
+        "line_3": "callout 01 line_3",
+        "line_4": "callout 01 line_4"
+      },
+      "02": {
+        "title": "MERGED VS WORK IN PROGRESS",
+        "line_1": "callout 02 line_1",
+        "line_2": "callout 02 line_2",
+        "line_3": "callout 02 line_3",
+        "line_4": "callout 02 line_4"
+      },
+      "03": {
+        "title": "OPEN CHECKS",
+        "line_1": "callout 03 line_1",
+        "line_2": "callout 03 line_2",
+        "line_3": "callout 03 line_3",
+        "line_4": "callout 03 line_4"
+      },
+      "04": {
+        "title": "DESIGN DECISIONS",
+        "line_1": "callout 04 line_1",
+        "line_2": "callout 04 line_2",
+        "line_3": "callout 04 line_3"
+      },
+      "05": {
+        "title": "SAFETY RAILS",
+        "line_1": "callout 05 line_1",
+        "line_2": "callout 05 line_2",
+        "line_3": "callout 05 line_3"
+      },
+      "06": {
+        "title": "ROTATION LEDGER",
+        "line_1": "callout 06 line_1",
+        "line_2": "callout 06 line_2",
+        "line_3": "callout 06 line_3",
+        "line_4": "callout 06 line_4"
+      }
+    },
+    "accessible_title": "Example project map",
+    "description": "Two example workstreams.",
+    "completion_note": "Completed stages describe that workstream only.",
+    "scoping_note": "Plan approved on day one.",
+    "evidence_note": "Evidence is illustrative.",
+    "sources_note": "Snapshot 3 Nov 2026.",
+    "heading": "Example · Project Mindmap",
+    "subtitle": "scope → build → ship",
+    "tagline": "A small example tracker.",
+    "center_title": "EXAMPLE",
+    "center_repository": "example/project",
+    "center_line_1": "Two workstreams, five gates",
+    "center_line_2": "One shipped, one in progress",
+    "center_line_3": "No open PRs · 1 open issue",
+    "center_line_4": "Next: finish workstream 02",
+    "acceptance_heading": "ACCEPTANCE GATES · 1 OF 5 ACCEPTED",
+    "later_scope": "Later work goes here.",
+    "excluded_scope": "Out of scope goes here."
+  },
+  "workstreams": {
+    "01": {
+      "title": "Foundation",
+      "repository": "example/project",
+      "status_summary": "Shipped",
+      "stages": {
+        "scoping": "complete",
+        "discovery": "complete",
+        "implementation": "complete",
+        "testing": "complete",
+        "delivery": "complete",
+        "issues": "pending"
+      },
+      "evidence_summary": "PRs #1–#3",
+      "evidence_url": "https://github.com/example/project/pull/3",
+      "tasks": {
+        "t1": {
+          "title": "Scaffold",
+          "description": "Repository and CI.",
+          "status_label": "MERGED · PR #1",
+          "color_stage": "delivery",
+          "evidence_url": "https://github.com/example/project/pull/1",
+          "github_issues": []
+        },
+        "t2": {
+          "title": "First feature",
+          "description": "The smallest useful thing.",
+          "status_label": "MERGED · PR #3",
+          "color_stage": "delivery",
+          "github_issues": []
+        }
+      },
+      "github_issues": []
+    },
+    "02": {
+      "title": "Second feature",
+      "repository": "example/project",
+      "status_summary": "In progress",
+      "stages": {
+        "scoping": "complete",
+        "discovery": "complete",
+        "issues": "complete",
+        "implementation": "partial",
+        "testing": "pending",
+        "delivery": "pending"
+      },
+      "evidence_summary": "Issue #7",
+      "tasks": {
+        "t1": {
+          "title": "Design",
+          "description": "Agreed in the issue.",
+          "status_label": "DONE",
+          "color_stage": "discovery",
+          "github_issues": []
+        },
+        "t2": {
+          "title": "Build",
+          "description": "Branch open; tests pending.",
+          "status_label": "OPEN · IN PROGRESS",
+          "color_stage": "implementation",
+          "evidence_url": "https://github.com/example/project/pull/8",
+          "github_issues": [
+            {
+              "repository": "example/project",
+              "number": 7,
+              "url": "https://github.com/example/project/issues/7"
+            }
+          ]
+        },
+        "t3": {
+          "title": "Ship",
+          "description": "Deploy after review.",
+          "status_label": "PENDING",
+          "color_stage": "pending",
+          "github_issues": []
+        }
+      },
+      "github_issues": [
+        {
+          "repository": "example/project",
+          "number": 7,
+          "url": "https://github.com/example/project/issues/7"
+        }
+      ]
+    }
+  },
+  "acceptance": {
+    "01": {
+      "title": "1 · Foundation live",
+      "description": "CI green on main.",
+      "status_label": "COMPLETE"
+    },
+    "02": {
+      "title": "2 · Gate 2",
+      "description": "Illustrative gate.",
+      "status_label": "PENDING"
+    },
+    "03": {
+      "title": "3 · Gate 3",
+      "description": "Illustrative gate.",
+      "status_label": "PENDING"
+    },
+    "04": {
+      "title": "4 · Gate 4",
+      "description": "Illustrative gate.",
+      "status_label": "PENDING"
+    },
+    "05": {
+      "title": "5 · Gate 5",
+      "description": "Illustrative gate.",
+      "status_label": "PENDING"
+    }
+  }
+}

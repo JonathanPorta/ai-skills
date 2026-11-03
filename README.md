@@ -13,6 +13,7 @@ additive plugin sidecar stay beside the portable `SKILL.md` they describe.
 | [`package-design-handoff`](skills/package-design-handoff/) | Deliver accepted work with an offline root guide, source tree, manifest, checksums, and provenance. | First-class GitHub plugin; 0.2.0 desktop update check pending | Helper tested; 0.2.0 direct harness check pending | Format-compatible; not yet verified |
 | [`ai-scratch`](skills/ai-scratch/) | Keep review clones and generated files in one designated scratch directory, and reclaim its disk through a confirm-first cleanup. | Format-compatible; not yet verified | Format-compatible; not yet verified | Verified with Claude Code |
 | [`recon`](skills/recon/) | Capture a public website as a research pack, from a one-page gist to a Docker-replayable forensic snapshot. | Format-compatible; not yet verified | Format-compatible; not yet verified | Verified with Claude Code (`gist` tier) |
+| [`tracker`](skills/tracker/) | Add or refresh a project status tracker in the notes repository — JSON state rendered into one offline HTML mind map — and deliver it as a PR. | Format-compatible; not yet verified | Format-compatible; not yet verified | Verified with Claude Code |
 
 Compatibility labels are conservative:
 

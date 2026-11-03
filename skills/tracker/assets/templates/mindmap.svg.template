@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="4200" height="{{@height}}" viewBox="0 0 4200 {{@height}}" role="img" aria-labelledby="title desc">
+<title id="title">{{project.accessible_title}}</title>
+<desc id="desc">{{project.description}}</desc>
+<defs><pattern id="hatch" patternUnits="userSpaceOnUse" width="9" height="9" patternTransform="rotate(35)"><line x1="0" y1="0" x2="0" y2="9" stroke="#7D8999" stroke-opacity=".27" stroke-width="3"/></pattern></defs>
+<style>text{font-family:Inter,Arial,sans-serif} .focus-node{cursor:pointer} .focus-node:hover .node-box{stroke:#66778D;stroke-width:3}</style>
+<rect x="0" y="0" width="4200" height="{{@height}}" rx="0" fill="#F6F7FA" stroke="none" />
+<text x="80" y="85" font-size="48" fill="#202C40" font-weight="500" text-anchor="start">{{project.heading}}</text>
+<text x="80" y="132" font-size="24" fill="#59677A" font-weight="400" text-anchor="start">{{project.subtitle}} · {{@snapshot_caption}}</text>
+<text x="4120" y="85" font-size="25" fill="#59677A" font-weight="500" text-anchor="end">{{project.tagline}}</text>
+<rect x="80" y="182" width="1240" height="178" rx="18" fill="#FFFFFF" stroke="#CBD3DF" />
+<text x="106" y="224" font-size="24" fill="#202C40" font-weight="500" text-anchor="start">{{project.context_panels.01.title}}</text>
+<text x="106" y="265" font-size="22" fill="#59677A" font-weight="400" text-anchor="start">{{project.context_panels.01.line_1}}</text>
+<text x="106" y="297" font-size="22" fill="#59677A" font-weight="400" text-anchor="start">{{project.context_panels.01.line_2}}</text>
+<text x="106" y="329" font-size="22" fill="#59677A" font-weight="400" text-anchor="start">{{project.context_panels.01.line_3}}</text>
+<rect x="1480" y="182" width="1240" height="178" rx="18" fill="#FFFFFF" stroke="#CBD3DF" />
+<text x="1506" y="224" font-size="24" fill="#202C40" font-weight="500" text-anchor="start">{{project.context_panels.02.title}}</text>
+<text x="1506" y="265" font-size="22" fill="#59677A" font-weight="400" text-anchor="start">{{project.context_panels.02.line_1}}</text>
+<text x="1506" y="297" font-size="22" fill="#59677A" font-weight="400" text-anchor="start">{{project.context_panels.02.line_2}}</text>
+<text x="1506" y="329" font-size="22" fill="#59677A" font-weight="400" text-anchor="start">{{project.context_panels.02.line_3}}</text>
+<rect x="2880" y="182" width="1240" height="178" rx="18" fill="#FFFFFF" stroke="#CBD3DF" />
+<text x="2906" y="224" font-size="24" fill="#202C40" font-weight="500" text-anchor="start">{{project.context_panels.03.title}}</text>
+<text x="2906" y="265" font-size="22" fill="#59677A" font-weight="400" text-anchor="start">{{project.context_panels.03.line_1}}</text>
+<text x="2906" y="297" font-size="22" fill="#59677A" font-weight="400" text-anchor="start">{{project.context_panels.03.line_2}}</text>
+<text x="2906" y="329" font-size="22" fill="#59677A" font-weight="400" text-anchor="start">{{project.context_panels.03.line_3}}</text>
+<text x="80" y="420" font-size="20" fill="#59677A" font-weight="500" text-anchor="start">NODE COLOR = FURTHEST COMPLETED STAGE</text>
+<rect x="650" y="396" width="23" height="23" rx="5" fill="#5868AE" stroke="none" />
+<text x="685" y="418" font-size="23" fill="#202C40" font-weight="400" text-anchor="start">Scoping</text>
+<rect x="985" y="396" width="23" height="23" rx="5" fill="#2581B7" stroke="none" />
+<text x="1020" y="418" font-size="23" fill="#202C40" font-weight="400" text-anchor="start">Discovery</text>
+<rect x="1320" y="396" width="23" height="23" rx="5" fill="#B77820" stroke="none" />
+<text x="1355" y="418" font-size="23" fill="#202C40" font-weight="400" text-anchor="start">{{@issues_name}}</text>
+<rect x="1655" y="396" width="23" height="23" rx="5" fill="#8859B9" stroke="none" />
+<text x="1690" y="418" font-size="23" fill="#202C40" font-weight="400" text-anchor="start">Implementation</text>
+<rect x="1990" y="396" width="23" height="23" rx="5" fill="#187F7A" stroke="none" />
+<text x="2025" y="418" font-size="23" fill="#202C40" font-weight="400" text-anchor="start">Testing</text>
+<rect x="2325" y="396" width="23" height="23" rx="5" fill="#4B8D45" stroke="none" />
+<text x="2360" y="418" font-size="23" fill="#202C40" font-weight="400" text-anchor="start">Delivery</text>
+<text x="2850" y="418" font-size="23" fill="#202C40" font-weight="400" text-anchor="start">✓ Complete     ◐ Partial / draft     — Pending</text>
+<text x="80" y="461" font-size="22" fill="#59677A" font-weight="400" text-anchor="start">{{@issues_note}} Child nodes show work and evidence. Testing is evidence, not product acceptance. Delivery means the workstream’s defined result is delivered.</text>
+{{@graph}}
+<g transform="translate(0 {{@center_shift}})">
+<rect x="1820" y="1700" width="560" height="340" rx="28" fill="#23334B" stroke="none" />
+<text x="2100" y="1770" font-size="37" fill="#FFFFFF" font-weight="500" text-anchor="middle">{{project.center_title}}</text>
+<text x="2100" y="1820" font-size="26" fill="#C8D8EF" font-weight="400" text-anchor="middle">{{project.center_repository}}</text>
+<text x="2100" y="1873" font-size="29" fill="#FFFFFF" font-weight="500" text-anchor="middle">{{project.center_line_1}}</text>
+<text x="2100" y="1922" font-size="24" fill="#FFFFFF" font-weight="400" text-anchor="middle">{{project.center_line_2}}</text>
+<text x="2100" y="1963" font-size="24" fill="#FFFFFF" font-weight="400" text-anchor="middle">{{project.center_line_3}}</text>
+<text x="2100" y="2005" font-size="20" fill="#C8D8EF" font-weight="400" text-anchor="middle">{{project.center_line_4}}</text>
+<rect x="1800" y="650" width="600" height="172" rx="14" fill="#FFFFFF" stroke="#CBD3DF" />
+<text x="2100" y="683" font-size="21" fill="#202C40" font-weight="500" text-anchor="middle">{{project.callouts.01.title}}</text>
+<text x="2100" y="718" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.01.line_1}}</text>
+<text x="2100" y="749" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.01.line_2}}</text>
+<text x="2100" y="780" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.01.line_3}}</text>
+<text x="2100" y="811" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.01.line_4}}</text>
+<rect x="1800" y="980" width="600" height="172" rx="14" fill="#FFFFFF" stroke="#CBD3DF" />
+<text x="2100" y="1013" font-size="21" fill="#202C40" font-weight="500" text-anchor="middle">{{project.callouts.02.title}}</text>
+<text x="2100" y="1048" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.02.line_1}}</text>
+<text x="2100" y="1079" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.02.line_2}}</text>
+<text x="2100" y="1110" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.02.line_3}}</text>
+<text x="2100" y="1141" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.02.line_4}}</text>
+<rect x="1800" y="1285" width="600" height="172" rx="14" fill="#FFFFFF" stroke="#CBD3DF" />
+<text x="2100" y="1318" font-size="21" fill="#202C40" font-weight="500" text-anchor="middle">{{project.callouts.03.title}}</text>
+<text x="2100" y="1353" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.03.line_1}}</text>
+<text x="2100" y="1384" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.03.line_2}}</text>
+<text x="2100" y="1415" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.03.line_3}}</text>
+<text x="2100" y="1446" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.03.line_4}}</text>
+<rect x="1800" y="2200" width="600" height="140" rx="14" fill="#FFFFFF" stroke="#CBD3DF" />
+<text x="2100" y="2233" font-size="21" fill="#202C40" font-weight="500" text-anchor="middle">{{project.callouts.04.title}}</text>
+<text x="2100" y="2268" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.04.line_1}}</text>
+<text x="2100" y="2299" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.04.line_2}}</text>
+<text x="2100" y="2330" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.04.line_3}}</text>
+<rect x="1800" y="2460" width="600" height="140" rx="14" fill="#FFFFFF" stroke="#CBD3DF" />
+<text x="2100" y="2493" font-size="21" fill="#202C40" font-weight="500" text-anchor="middle">{{project.callouts.05.title}}</text>
+<text x="2100" y="2528" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.05.line_1}}</text>
+<text x="2100" y="2559" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.05.line_2}}</text>
+<text x="2100" y="2590" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.05.line_3}}</text>
+<rect x="1800" y="2760" width="600" height="172" rx="14" fill="#FFFFFF" stroke="#CBD3DF" />
+<text x="2100" y="2793" font-size="21" fill="#202C40" font-weight="500" text-anchor="middle">{{project.callouts.06.title}}</text>
+<text x="2100" y="2828" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.06.line_1}}</text>
+<text x="2100" y="2859" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.06.line_2}}</text>
+<text x="2100" y="2890" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.06.line_3}}</text>
+<text x="2100" y="2921" font-size="20" fill="#59677A" font-weight="400" text-anchor="middle">{{project.callouts.06.line_4}}</text>
+</g>
+<g transform="translate(0 {{@footer_shift}})">
+<text x="80" y="3450" font-size="28" fill="#202C40" font-weight="500" text-anchor="start">{{project.acceptance_heading}}</text>
+<rect x="80" y="3480" width="775" height="115" rx="14" fill="#FFFFFF" stroke="#CBD3DF" />
+<text x="102" y="3516" font-size="23" fill="#202C40" font-weight="500" text-anchor="start">{{acceptance.01.title}}</text>
+<text x="102" y="3552" font-size="18" fill="#59677A" font-weight="400" text-anchor="start">{{acceptance.01.description}}</text>
+<text x="102" y="3578" font-size="14" fill="#59677A" font-weight="500" text-anchor="start">{{acceptance.01.status_label}}</text>
+<rect x="895" y="3480" width="775" height="115" rx="14" fill="#FFFFFF" stroke="#CBD3DF" />
+<text x="917" y="3516" font-size="23" fill="#202C40" font-weight="500" text-anchor="start">{{acceptance.02.title}}</text>
+<text x="917" y="3552" font-size="18" fill="#59677A" font-weight="400" text-anchor="start">{{acceptance.02.description}}</text>
+<text x="917" y="3578" font-size="14" fill="#59677A" font-weight="500" text-anchor="start">{{acceptance.02.status_label}}</text>
+<rect x="1710" y="3480" width="775" height="115" rx="14" fill="#FFFFFF" stroke="#CBD3DF" />
+<text x="1732" y="3516" font-size="23" fill="#202C40" font-weight="500" text-anchor="start">{{acceptance.03.title}}</text>
+<text x="1732" y="3552" font-size="18" fill="#59677A" font-weight="400" text-anchor="start">{{acceptance.03.description}}</text>
+<text x="1732" y="3578" font-size="14" fill="#59677A" font-weight="500" text-anchor="start">{{acceptance.03.status_label}}</text>
+<rect x="2525" y="3480" width="775" height="115" rx="14" fill="#FFFFFF" stroke="#CBD3DF" />
+<text x="2547" y="3516" font-size="23" fill="#202C40" font-weight="500" text-anchor="start">{{acceptance.04.title}}</text>
+<text x="2547" y="3552" font-size="18" fill="#59677A" font-weight="400" text-anchor="start">{{acceptance.04.description}}</text>
+<text x="2547" y="3578" font-size="14" fill="#59677A" font-weight="500" text-anchor="start">{{acceptance.04.status_label}}</text>
+<rect x="3340" y="3480" width="775" height="115" rx="14" fill="#FFFFFF" stroke="#CBD3DF" />
+<text x="3362" y="3516" font-size="23" fill="#202C40" font-weight="500" text-anchor="start">{{acceptance.05.title}}</text>
+<text x="3362" y="3552" font-size="18" fill="#59677A" font-weight="400" text-anchor="start">{{acceptance.05.description}}</text>
+<text x="3362" y="3578" font-size="14" fill="#59677A" font-weight="500" text-anchor="start">{{acceptance.05.status_label}}</text>
+<text x="80" y="3655" font-size="23" fill="#202C40" font-weight="500" text-anchor="start">LATER</text>
+<text x="275" y="3655" font-size="23" fill="#59677A" font-weight="400" text-anchor="start">{{project.later_scope}}</text>
+<text x="80" y="3712" font-size="23" fill="#202C40" font-weight="500" text-anchor="start">EXCLUDED</text>
+<text x="275" y="3712" font-size="23" fill="#59677A" font-weight="400" text-anchor="start">{{project.excluded_scope}}</text>
+<text x="80" y="3790" font-size="23" fill="#59677A" font-weight="400" text-anchor="start">{{project.completion_note}}</text>
+<text x="80" y="3830" font-size="22" fill="#59677A" font-weight="400" text-anchor="start">{{project.scoping_note}}</text>
+<text x="80" y="3870" font-size="22" fill="#59677A" font-weight="400" text-anchor="start">{{project.evidence_note}}</text>
+<text x="80" y="3920" font-size="19" fill="#59677A" font-weight="400" text-anchor="start">{{project.sources_note}}</text>
+<text x="4120" y="3920" font-size="19" fill="#59677A" font-weight="500" text-anchor="end">{{@snapshot_footer}}</text>
+</g>
+</svg>
+
+

@@ -1,0 +1,784 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "snapshot",
+    "project",
+    "workstreams",
+    "acceptance"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 2
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "date",
+        "evidence_ref",
+        "extracted_from"
+      ],
+      "properties": {
+        "date": {
+          "type": "string",
+          "format": "date"
+        },
+        "evidence_ref": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{7,40}$"
+        },
+        "extracted_from": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository",
+            "commit",
+            "path"
+          ],
+          "properties": {
+            "repository": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            },
+            "commit": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            },
+            "path": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            }
+          }
+        }
+      }
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context_panels",
+        "callouts",
+        "accessible_title",
+        "description",
+        "completion_note",
+        "scoping_note",
+        "evidence_note",
+        "sources_note",
+        "heading",
+        "subtitle",
+        "tagline",
+        "center_title",
+        "center_repository",
+        "center_line_1",
+        "center_line_2",
+        "center_line_3",
+        "center_line_4",
+        "acceptance_heading",
+        "later_scope",
+        "excluded_scope"
+      ],
+      "properties": {
+        "context_panels": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "01",
+            "02",
+            "03"
+          ],
+          "properties": {
+            "01": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "title",
+                "line_1",
+                "line_2",
+                "line_3"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_1": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_2": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_3": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                }
+              }
+            },
+            "02": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "title",
+                "line_1",
+                "line_2",
+                "line_3"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_1": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_2": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_3": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                }
+              }
+            },
+            "03": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "title",
+                "line_1",
+                "line_2",
+                "line_3"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_1": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_2": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_3": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                }
+              }
+            }
+          }
+        },
+        "callouts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "01",
+            "02",
+            "03",
+            "04",
+            "05",
+            "06"
+          ],
+          "properties": {
+            "01": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "title",
+                "line_1",
+                "line_2",
+                "line_3",
+                "line_4"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_1": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_2": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_3": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_4": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                }
+              }
+            },
+            "02": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "title",
+                "line_1",
+                "line_2",
+                "line_3",
+                "line_4"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_1": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_2": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_3": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_4": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                }
+              }
+            },
+            "03": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "title",
+                "line_1",
+                "line_2",
+                "line_3",
+                "line_4"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_1": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_2": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_3": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_4": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                }
+              }
+            },
+            "04": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "title",
+                "line_1",
+                "line_2",
+                "line_3"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_1": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_2": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_3": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                }
+              }
+            },
+            "05": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "title",
+                "line_1",
+                "line_2",
+                "line_3"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_1": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_2": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_3": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                }
+              }
+            },
+            "06": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "title",
+                "line_1",
+                "line_2",
+                "line_3",
+                "line_4"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_1": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_2": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_3": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                },
+                "line_4": {
+                  "type": "string",
+                  "pattern": "^[^\\u0000-\\u001f]*$"
+                }
+              }
+            }
+          }
+        },
+        "accessible_title": {
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        },
+        "description": {
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        },
+        "completion_note": {
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        },
+        "scoping_note": {
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        },
+        "evidence_note": {
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        },
+        "sources_note": {
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        },
+        "heading": {
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        },
+        "subtitle": {
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        },
+        "tagline": {
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        },
+        "center_title": {
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        },
+        "center_repository": {
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        },
+        "center_line_1": {
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        },
+        "center_line_2": {
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        },
+        "center_line_3": {
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        },
+        "center_line_4": {
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        },
+        "acceptance_heading": {
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        },
+        "later_scope": {
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        },
+        "excluded_scope": {
+          "type": "string",
+          "pattern": "^[^\\u0000-\\u001f]*$"
+        }
+      }
+    },
+    "workstreams": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[0-9]+$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "title",
+            "repository",
+            "status_summary",
+            "stages",
+            "evidence_summary",
+            "tasks",
+            "github_issues"
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            },
+            "repository": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            },
+            "status_summary": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            },
+            "stages": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "scoping",
+                "discovery",
+                "issues",
+                "implementation",
+                "testing",
+                "delivery"
+              ],
+              "properties": {
+                "scoping": {
+                  "enum": [
+                    "complete",
+                    "partial",
+                    "pending"
+                  ]
+                },
+                "discovery": {
+                  "enum": [
+                    "complete",
+                    "partial",
+                    "pending"
+                  ]
+                },
+                "issues": {
+                  "enum": [
+                    "complete",
+                    "partial",
+                    "pending"
+                  ]
+                },
+                "implementation": {
+                  "enum": [
+                    "complete",
+                    "partial",
+                    "pending"
+                  ]
+                },
+                "testing": {
+                  "enum": [
+                    "complete",
+                    "partial",
+                    "pending"
+                  ]
+                },
+                "delivery": {
+                  "enum": [
+                    "complete",
+                    "partial",
+                    "pending"
+                  ]
+                }
+              }
+            },
+            "evidence_summary": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            },
+            "tasks": {
+              "type": "object",
+              "additionalProperties": false,
+              "patternProperties": {
+                "^[A-Za-z0-9_-]+$": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "title",
+                    "description",
+                    "status_label",
+                    "color_stage",
+                    "github_issues"
+                  ],
+                  "properties": {
+                    "title": {
+                      "type": "string",
+                      "pattern": "^[^\\u0000-\\u001f]*$"
+                    },
+                    "description": {
+                      "type": "string",
+                      "pattern": "^[^\\u0000-\\u001f]*$"
+                    },
+                    "status_label": {
+                      "type": "string",
+                      "pattern": "^[^\\u0000-\\u001f]*$"
+                    },
+                    "color_stage": {
+                      "enum": [
+                        "scoping",
+                        "discovery",
+                        "issues",
+                        "implementation",
+                        "testing",
+                        "delivery",
+                        "pending"
+                      ]
+                    },
+                    "evidence_url": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "string",
+                          "format": "uri",
+                          "pattern": "^https://[^\\s]+$"
+                        }
+                      ]
+                    },
+                    "github_issues": {
+                      "$ref": "#/$defs/githubIssues"
+                    }
+                  }
+                }
+              }
+            },
+            "evidence_url": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https://[^\\s]+$"
+                }
+              ]
+            },
+            "github_issues": {
+              "$ref": "#/$defs/githubIssues"
+            }
+          }
+        }
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "01",
+        "02",
+        "03",
+        "04",
+        "05"
+      ],
+      "properties": {
+        "01": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "title",
+            "description",
+            "status_label"
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            },
+            "description": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            },
+            "status_label": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            }
+          }
+        },
+        "02": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "title",
+            "description",
+            "status_label"
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            },
+            "description": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            },
+            "status_label": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            }
+          }
+        },
+        "03": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "title",
+            "description",
+            "status_label"
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            },
+            "description": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            },
+            "status_label": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            }
+          }
+        },
+        "04": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "title",
+            "description",
+            "status_label"
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            },
+            "description": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            },
+            "status_label": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            }
+          }
+        },
+        "05": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "title",
+            "description",
+            "status_label"
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            },
+            "description": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            },
+            "status_label": {
+              "type": "string",
+              "pattern": "^[^\\u0000-\\u001f]*$"
+            }
+          }
+        }
+      }
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tracker state",
+  "description": "State for the configurable-workstream EBCD-format map. This schema validates shape; renderer validation also checks dates, safe evidence URLs, and exact template fields.",
+  "$defs": {
+    "githubIssues": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "GitHub issue associations. The renderer also verifies that each URL matches repository and number. Empty for historical work with no issue.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repository",
+          "number",
+          "url"
+        ],
+        "properties": {
+          "repository": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+          },
+          "number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[1-9][0-9]*$"
+          }
+        }
+      }
+    }
+  }
+}

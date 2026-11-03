@@ -1,0 +1,47 @@
+{
+  "$schema": "https://open-design.ai/schemas/plugin.v1.json",
+  "specVersion": "1.0.0",
+  "name": "tracker",
+  "title": "Tracker",
+  "version": "0.1.0",
+  "description": "Add or refresh a project's status tracker in the operator's notes repository: JSON state rendered into one offline HTML mind map, delivered as a PR.",
+  "author": {
+    "name": "Jonathan Porta",
+    "url": "https://github.com/JonathanPorta"
+  },
+  "homepage": "https://github.com/JonathanPorta/ai-skills/tree/main/skills/tracker",
+  "icon": "./assets/icon.svg",
+  "tags": [
+    "tracker",
+    "status",
+    "notes",
+    "mindmap"
+  ],
+  "compat": {
+    "agentSkills": [
+      {
+        "path": "./SKILL.md"
+      }
+    ]
+  },
+  "od": {
+    "kind": "skill",
+    "taskKind": "tune-collab",
+    "mode": "export",
+    "platform": "desktop",
+    "scenario": "project-tracker",
+    "useCase": {
+      "query": "Record where a project stands as a status mind map in the notes repository, from live GitHub evidence, and deliver it as a reviewable PR."
+    },
+    "context": {
+      "skills": [
+        {
+          "path": "./SKILL.md"
+        }
+      ]
+    },
+    "capabilities": [
+      "prompt:inject"
+    ]
+  }
+}

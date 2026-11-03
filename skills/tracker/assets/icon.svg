@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">Tracker</title>
+  <rect width="128" height="128" rx="28" fill="#202C40"/>
+  <rect x="50" y="50" width="28" height="28" rx="6" fill="#F6F7FA"/>
+  <path d="M50 64H30M78 64h20M64 50V30M64 78v20" stroke="#CBD3DF" stroke-width="4" stroke-linecap="round"/>
+  <rect x="18" y="56" width="12" height="16" rx="3" fill="#5868AE"/>
+  <rect x="98" y="56" width="12" height="16" rx="3" fill="#4B8D45"/>
+  <rect x="56" y="18" width="16" height="12" rx="3" fill="#2581B7"/>
+  <rect x="56" y="98" width="16" height="12" rx="3" fill="#187F7A"/>
+</svg>

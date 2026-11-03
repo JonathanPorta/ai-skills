@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{@project}} project mind map</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#eef1f6;color:#23334b;font:14px system-ui,sans-serif}header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:14px 20px;background:#fff;border-bottom:1px solid #ced6e2}h1{margin:0;font-size:19px;font-weight:600}header span{color:#5a677a}nav{margin-left:auto;display:flex;align-items:center;gap:7px;flex-wrap:wrap}button,select{font:inherit;color:inherit;border:1px solid #bbc6d4;border-radius:6px;padding:7px 10px;background:#fff;cursor:pointer}button:hover{background:#eef2f8}button:focus-visible,select:focus-visible{outline:3px solid #437daa;outline-offset:2px}#canvas{height:calc(100dvh - 110px);min-height:400px;touch-action:none;cursor:grab;overflow:hidden}#canvas.drag{cursor:grabbing}#canvas svg{width:100%;height:100%;display:block;user-select:none}footer{padding:9px 20px;background:#fff;border-top:1px solid #ced6e2;display:flex;gap:20px;flex-wrap:wrap;font-size:12px;color:#56667c}@media(max-width:650px){header{gap:8px;padding:10px}nav{margin-left:0}#canvas{height:calc(100dvh - 170px)}footer{padding:7px 10px}}@media print{header,footer{display:none}#canvas{height:auto}#canvas svg{width:100%;height:auto}}
+</style></head><body>
+<header><h1>{{@project}} project mind map</h1><span>{{@html_snapshot}}</span><nav aria-label="Map controls"><label for="focus">Focus</label><select id="focus"><option value="all">Whole project</option>{{@focus_options}}</select><button id="out" aria-label="Zoom out">−</button><button id="in" aria-label="Zoom in">+</button><button id="fit">Fit all</button><button id="download">Download SVG</button></nav></header>
+<main id="canvas" aria-label="Zoomable {{@project}} mind map">{{svg}}</main>
+<footer><span>Drag to pan · scroll to zoom · select a workstream to focus</span><span>✓ Complete · ◐ Partial / draft · — Pending</span><span>Cards open issues; status labels and source summaries open evidence</span><span id="viewstatus" aria-live="polite">Whole project</span></footer>
+<script>
+const svg=document.querySelector('#canvas svg'),canvas=document.getElementById('canvas');
+const original=svg.outerHTML; let box=svg.getAttribute('viewBox').split(/\s+/).map(Number); const full=box.slice();
+function render(){svg.setAttribute('viewBox',box.join(' '));}
+function fit(){box=full.slice();render();document.getElementById('focus').value='all';document.getElementById('viewstatus').textContent='Whole project';}
+function zoom(f,cx=.5,cy=.5){const nw=box[2]*f,nh=box[3]*f;if(nw<350||nw>10000)return;box=[box[0]+(box[2]-nw)*cx,box[1]+(box[3]-nh)*cy,nw,nh];render();}
+function focus(id){if(id==='all'){fit();return}const g=svg.querySelector('[data-node="'+id+'"]');box=g.dataset.focus.split(',').map(Number);render();document.getElementById('focus').value=id;document.getElementById('viewstatus').textContent='Workstream '+id;}
+document.getElementById('focus').addEventListener('change',e=>focus(e.target.value));
+document.getElementById('fit').onclick=fit;document.getElementById('in').onclick=()=>zoom(.8);document.getElementById('out').onclick=()=>zoom(1.25);
+canvas.addEventListener('wheel',e=>{e.preventDefault();const pt=new DOMPoint(e.clientX,e.clientY).matrixTransform(svg.getScreenCTM().inverse());zoom(e.deltaY>0?1.12:1/1.12,(pt.x-box[0])/box[2],(pt.y-box[1])/box[3]);},{passive:false});
+{{#evidence_links}}// Issue and evidence links keep native navigation without triggering map pan or node focus.
+svg.querySelectorAll('a[data-evidence-link],a[data-issue-link]').forEach(link=>{
+  ['pointerdown','pointerup','click','wheel'].forEach(type=>link.addEventListener(type,e=>e.stopPropagation()));
+});
+{{/evidence_links}}let drag=null,moved=false;canvas.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,box:box.slice(),scale:svg.getScreenCTM().a};moved=false;canvas.setPointerCapture(e.pointerId);canvas.classList.add('drag');});
+canvas.addEventListener('pointermove',e=>{if(!drag)return;const dx=(e.clientX-drag.x)/drag.scale,dy=(e.clientY-drag.y)/drag.scale;if(Math.abs(dx)+Math.abs(dy)>3)moved=true;box=[drag.box[0]-dx,drag.box[1]-dy,drag.box[2],drag.box[3]];render();});
+canvas.addEventListener('pointerup',e=>{const didMove=moved;drag=null;canvas.classList.remove('drag');canvas.releasePointerCapture(e.pointerId);if(!didMove){const hit=document.elementFromPoint(e.clientX,e.clientY);const g=hit&&hit.closest('[data-node]');if(g)focus(g.dataset.node);}});
+canvas.addEventListener('pointercancel',()=>{drag=null;canvas.classList.remove('drag');});
+document.getElementById('download').onclick=()=>{const url=URL.createObjectURL(new Blob([original],{type:'image/svg+xml'}));const a=document.createElement('a');a.href=url;a.download='{{@slug}}-project-mindmap.svg';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+</script></body></html>
+

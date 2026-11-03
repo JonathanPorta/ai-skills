@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tracker layout configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "workstream_count"
+  ],
+  "properties": {
+    "workstream_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Must equal the number of workstreams in the state file."
+    },
+    "project": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Display name used in the HTML title and header. Defaults to the state's project.heading before the first ' · '."
+    },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "description": "File stem: <slug>-project-state.json and <slug>-project-mindmap.{html,svg,png}. Defaults to the state filename's stem."
+    },
+    "ref_label": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Words before the evidence ref in the snapshot caption, e.g. 'kioskit main'. Defaults to 'main'."
+    },
+    "issues_label": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Display name of the third stage, e.g. 'Issues', 'Approval', 'Review', 'Planning'. The state key stays 'issues'. Defaults to 'Issues'."
+    },
+    "issues_note": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The legend sentence explaining the third stage. Defaults to '<issues_label> ✓ means linked, not closed.'"
+    }
+  }
+}
