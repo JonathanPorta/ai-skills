@@ -224,6 +224,25 @@ class TestApplyIsBoundToApproval(ScratchFixture):
         self.assertFalse((self.root / "old-one").exists())
         self.assertFalse((self.root / "old-two").exists())
 
+    def test_read_only_tree_is_removed_on_a_clean_apply(self):
+        # A Go module cache makes every file and directory read-only, and an
+        # entry cannot be unlinked from a read-only directory. rm -rf alone
+        # failed partway and left the approved entry staged.
+        module = self.root / "old-one" / "go-mod" / "example.com" / "m@v1.0.0"
+        module.mkdir(parents=True)
+        (module / "m.go").write_text("package m\n")
+        backdate(self.root)
+        self.addCleanup(subprocess.run, ["chmod", "-R", "u+w", str(self.tmp)],
+                        capture_output=True)
+        subprocess.run(["chmod", "-R", "a-w", str(self.root / "old-one" / "go-mod")],
+                       check=True, capture_output=True)
+
+        manifest = self.manifest_from_dry_run()
+        result = self.sweep("--apply", "--manifest", manifest)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.root / "old-one").exists())
+        self.assertNotIn("staging directory is not empty", result.stderr)
+
 
 class TestRootIdentityAndOptions(ScratchFixture):
     """One definition of a safe root, and no option that can hang."""

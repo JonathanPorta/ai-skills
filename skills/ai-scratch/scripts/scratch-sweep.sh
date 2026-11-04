@@ -364,6 +364,11 @@ while IFS="$(printf '\t')" read -r hexname devino kb; do
   # Every removal is accounted for. A silent failure here previously left the
   # object to be swept up by a blanket cleanup, reporting "Removed 0 of 1" and
   # exiting 0 while the object was in fact gone.
+  # A Go module cache is read-only throughout, and nothing can be unlinked from
+  # a read-only directory, so rm -rf alone stops partway. Restore owner write
+  # first: the object is staged and has passed every keep rule. chmod -R does
+  # not follow symlinks, so nothing outside the staged tree changes.
+  chmod -R -- u+w "$staged" 2>/dev/null
   if rm -rf -- "$staged" 2>/dev/null && [ ! -e "$staged" ]; then
     printf '  removed %s\n' "$shown"; removed=$((removed+1))
   else
