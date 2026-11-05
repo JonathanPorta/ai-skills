@@ -23,7 +23,7 @@ boring.
 
 ## Configuration
 
-`scratch-setup.sh --hold "reason"` / `--release` set and clear `AI_SCRATCH_HOLD`, which makes every `--apply` refuse. `AI_SCRATCH_LENDER_SCAN` lists extra directories to search for `objects/info/alternates` borrowers.
+`scratch-setup.sh --hold "reason"` / `--release` set and clear `AI_SCRATCH_HOLD`, which makes every `--apply` refuse. `AI_SCRATCH_LENDER_SCAN` lists extra directories to search for `objects/info/alternates` borrowers. `AI_SCRATCH_OWNERS` (default `~/devel/worktrees/.owners`, `~` expanded) is the directory of ownership records: flat JSON files, one `"key": value` per line, with `"worktree"` (absolute path), `"complete"` and `"released"`; an entry is reclaimable only with a complete + released record, and `scratch-setup.sh` reports the directory, the record counts and any malformed file.
 
 
 Resolution order, highest first:
@@ -89,9 +89,14 @@ if the reclaimable set drifted, and revalidates each object immediately before
 removing it.
 
 An entry is reclaimable only when it is not hidden, nothing inside it has changed
-within the idle window, and no repository within it — including linked worktrees
+within the idle window, no repository within it — including linked worktrees
 and nested repos — holds uncommitted changes or commits missing from every
-remote. Anything git cannot be read for is kept. Everything else is kept with the
+remote, nothing else depends on it, **and exactly one well-formed ownership
+record names its physical path and says `"complete": true` and
+`"released": true`**. No record, an unreleased record, two records for one
+path, or an unreleased record for something inside it all keep the entry; a
+malformed or unreadable record keeps everything and makes `--apply` refuse.
+Anything git cannot be read for is kept. Everything else is kept with the
 reason printed.
 
 Set `AI_SCRATCH_ROOT` or pass `--root` to point at a different directory.

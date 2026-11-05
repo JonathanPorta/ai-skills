@@ -109,7 +109,10 @@ scripts/scratch-sweep.sh --apply --manifest FILE   # delete exactly what was app
      already been renamed aside, so nothing can reach it afresh and the only
      processes that could still write to it are those holding a descriptor or
      sitting in it from before — which are enumerated by name. A shell parked
-     in a directory, or an editor with a file open, keeps that entry.
+     in a directory, or an editor with a file open, keeps that entry;
+   - its owner has said so: exactly one well-formed ownership record names it
+     and says `"complete": true` and `"released": true`. An entry with no
+     record is kept, however clean, pushed and idle it is.
 4. **Wait for an explicit yes.** Never run `--apply` in the same turn as the
    proposal, and never infer approval from an earlier instruction.
 5. Run `--apply --manifest <file>` using the manifest the dry run printed, then
@@ -126,9 +129,10 @@ If the set has drifted, do not hunt for a workaround: run a fresh dry run and
 show the new proposal. The abort means the thing approved is no longer the thing
 on disk.
 
-If the operator wants something kept that the report marked `FREE`, raise the
-idle threshold rather than hand-editing the list — a bigger `--older-than` is
-reviewable, a bespoke exclusion is not.
+If the operator wants something kept that the report marked `FREE`, set
+`"released": false` in its ownership record (or pin it with `--protect`) rather
+than hand-editing the list — a record and a pin are reviewable, a bespoke
+exclusion is not.
 
 ## Hold, lenders, and the source layout
 
@@ -153,11 +157,21 @@ reviewable, a bespoke exclusion is not.
   between review and apply blocks the apply. Do not create new clones that borrow from a disposable
   repository (`git clone --shared`, `--reference` without `--dissociate`): a borrower is only as durable as
   its lender, and a borrower of a blob-less partial clone cannot even pass `fsck`.
-- **Ownership records.** `AI_SCRATCH_OWNERS` (default `~/devel/worktrees/.owners`) holds JSON records that
-  name a worktree path; an entry whose record is not `"released": true` is kept. Entries with no record
-  rely on the ordinary rules (clean, pushed, idle, no dependency, not pinned, not held).
+- **Ownership records are the final gate.** `AI_SCRATCH_OWNERS` (default `~/devel/worktrees/.owners`)
+  holds one flat JSON record per task worktree (`"worktree"`: absolute path, `"complete"`, `"released"`,
+  plus owner, purpose, branch, PR and dates for humans; one `"key": value` per line, no nesting). An entry
+  is reclaimable **only** when exactly one well-formed record names its physical path and says
+  `"complete": true` **and** `"released": true`. **No record keeps the entry.** So does a record that is not
+  released, two records for one path (ambiguous), or an unreleased record for something inside the entry.
+  A malformed or unreadable record cannot be attributed to an entry, so it keeps every entry and makes
+  `--apply` refuse until it is fixed (`scratch-setup.sh` names the file). Age, a clean tree and a pushed
+  history say an entry is probably safe; only its owner can say it is done with, and the sweep never
+  manufactures a release from idleness or from the absence of a running process. Records are written by
+  hand or by a helper that uses this library's writer (raw UTF-8 only; `\uXXXX` escapes are refused, not
+  guessed at); `scratch-setup.sh` shows the directory, how many records are released, and any malformed file.
 - **Idle is a filter, not an authorization.** The idle window selects what is examined; only the keep
-  rules (clean, pushed, no lender, no host, not pinned, not held) decide what is reclaimable.
+  rules (clean, pushed, no lender, no host, not pinned, not held, complete + released record) decide
+  what is reclaimable.
 - **Source layout.** Human checkouts stay under `~/devel/portaj/<repo>`. Agent task worktrees go under
   `~/devel/worktrees/portaj/<repo>/<task>` with an ownership record at
   `~/devel/worktrees/.owners/<repo>/<task>.json` (owner, purpose, branch, PR, complete, released);
