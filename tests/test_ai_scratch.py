@@ -1514,6 +1514,31 @@ class TestOwnershipRecords(ScratchFixture):
         self.assertRegex(out, r"FREE\s+plain\b")
         self.assertIn(str(owners), run(SETUP, env_extra={**self.env, "HOME": str(home)}).stdout)
 
+    def test_a_symlinked_owners_directory_is_walked(self):
+        (self.root / "plain").mkdir()
+        backdate(self.root)
+        self.release("plain", released=False)
+        link = self.tmp / "owners-link"
+        link.symlink_to(self.owners)
+        (Path(self.cfg) / "config").write_text(f"AI_SCRATCH_OWNERS = {link}\n")
+        self.assertRegex(self.sweep("--verbose").stdout, r"KEEP\s+plain\s.*owner record not released")
+
+    def test_a_home_directory_is_refused_as_the_owners_directory(self):
+        (self.root / "plain").mkdir()
+        backdate(self.root)
+        home = self.tmp / "home"
+        home.mkdir()
+        (Path(self.cfg) / "config").write_text("AI_SCRATCH_OWNERS = ~\n")
+        dry = run(SWEEP, "--root", str(self.root), "--verbose", env_extra={**self.env, "HOME": str(home)})
+        self.assertIn("malformed", dry.stderr)
+        self.assertNotIn("FREE", dry.stdout)
+
+    def test_a_missing_index_file_fails_the_ownership_check_closed(self):
+        lib = SCRIPTS / "lib-scratch.sh"
+        script = f'. "{lib}"; scratch_owner_keep_reason /some/entry /nonexistent/index'
+        out = subprocess.run(["bash", "-c", script], capture_output=True, text=True).stdout
+        self.assertIn("fail closed", out)
+
     def test_setup_reports_the_ownership_directory(self):
         self.release("plain")
         out = run(SETUP, env_extra=self.env)

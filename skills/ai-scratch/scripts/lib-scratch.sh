@@ -360,6 +360,14 @@ scratch_owner_index() {  # <owners-dir> <out-file>
   local dir="$1" out="$2" f line status wt real rc=0 err
   : >"$out"
   [ -n "$dir" ] && [ -d "$dir" ] || return 0
+  # Walk the physical directory: find does not descend a symlinked starting
+  # point, which would turn a symlinked owners directory into "no records".
+  # And never walk a whole home directory for *.json: that is a misconfiguration.
+  dir="$(scratch_canonical "$dir")" || { printf 'malformed\t\t%s\n' "$(scratch_hex_encode "$1 (cannot resolve)")" >>"$out"; return 1; }
+  local home_real; home_real="$(scratch_canonical "${HOME:-/nonexistent}" 2>/dev/null)" || home_real="${HOME:-/nonexistent}"
+  if [ "$dir" = "$home_real" ] || [ "$dir" = / ]; then
+    printf 'malformed\t\t%s\n' "$(scratch_hex_encode "$dir (refusing to use a home or root directory for ownership records)")" >>"$out"; return 1
+  fi
   if [ ! -r "$dir" ] || [ ! -x "$dir" ]; then
     printf 'malformed\t\t%s\n' "$(scratch_hex_encode "$dir (directory not readable)")" >>"$out"; return 1
   fi
@@ -424,7 +432,7 @@ scratch_owner_keep_reason() {  # <canonical-path> <index-file>
       if (n > 1) { printf "ambiguous ownership (%d records)\t\n", n; exit }
       if (st != "released") { printf "owner record not released\t%s\n", file; exit }
       if (inside > 0) { printf "contains an owned worktree not released\t%s\n", ifile; exit }
-    }' "$2")"
+    }' "$2")" || { printf 'ownership check failed (fail closed)'; return 0; }
   [ -n "$out" ] || return 0
   reason="${out%%	*}"; filehex="${out#*	}"
   if [ -n "$filehex" ]; then

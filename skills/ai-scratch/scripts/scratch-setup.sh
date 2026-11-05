@@ -112,12 +112,11 @@ owners_idx="$(mktemp "${TMPDIR:-/tmp}/scratch-owners.XXXXXX")" || scratch_die "c
 if scratch_owner_index "$owners" "$owners_idx"; then
   n_rel="$(awk -F '\t' '$1 == "released"' "$owners_idx" | wc -l | tr -d ' ')"
   n_all="$(wc -l <"$owners_idx" | tr -d ' ')"
-  printf 'ownership    : %s (%s record%s, %s released; entries without a complete + released record are never reclaimed)\n' \
-    "$owners" "$n_all" "$([ "$n_all" = 1 ] || printf s)" "$n_rel"
+  printf 'ownership    : %s (%s record%s, %s released; entries without a complete + released record are never reclaimed)%s\n' \
+    "$owners" "$n_all" "$([ "$n_all" = 1 ] || printf s)" "$n_rel" "$([ -d "$owners" ] || printf ' — directory does not exist, so nothing is released')"
 else
   printf 'ownership    : %s — MALFORMED record(s); the sweep keeps everything and refuses --apply until fixed:\n' "$owners"
   scratch_owner_index_malformed "$owners_idx" | sed 's/^/               /'
-  [ -d "$owners" ] || printf '               (%s does not exist)\n' "$owners"
 fi
 rm -f "$owners_idx"
 printf 'config file  : %s%s\n' "$CONFIG" "$([ -f "$CONFIG" ] && printf '' || printf ' (not present)')"
