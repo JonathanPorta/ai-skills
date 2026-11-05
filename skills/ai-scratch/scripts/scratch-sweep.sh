@@ -198,6 +198,11 @@ trap 'rm -rf "$WORK"' EXIT
 # (where the operator's primaries normally live), plus any directories named in
 # AI_SCRATCH_LENDER_SCAN (space-separated), with build trees pruned. The scan is
 # bounded on purpose: it runs on every sweep, so it must stay cheap.
+# TODO: -maxdepth 6 from the root's parent indexes borrowers at most one
+# directory below a root entry, and the prune list matches any directory named
+# node_modules/.build/target/dist, repository or not. Deeper or oddly named
+# borrowers are not indexed; widen with AI_SCRATCH_LENDER_SCAN until this is
+# replaced by a per-entry search.
 LENDERS="$WORK/lenders"; : >"$LENDERS"
 scan_parent="$(dirname -- "$ROOT_REAL")"
 # shellcheck disable=SC2046
