@@ -449,3 +449,36 @@ scratch_json_string() {  # <text>
   scratch_text_is_sane "$1" || return 1
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
+
+# Dump a record's fields as "key<TAB>type<TAB>value" (type: string|bool|null|number),
+# string values unescaped. Prints nothing for a malformed record (callers must
+# check scratch_owner_record_parse first). Same grammar as the parser.
+scratch_owner_record_dump() {  # <file>
+  LC_ALL=C awk '
+    function unescape(s,   out, i, c, n) {
+      out = ""; n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c == "\\") { i++; c = substr(s, i, 1); if (c == "\\" || c == "\"" || c == "/") out = out c; else return "" }
+        else out = out c
+      }
+      return out
+    }
+    {
+      line = $0; sub(/^[ \t\r]+/, "", line); sub(/[ \t\r]+$/, "", line)
+      if (line == "" || line == "{" || line == "}") next
+      if (match(line, /^"[A-Za-z0-9_.-]+"[ \t]*:[ \t]*/)) {
+        k = line; sub(/^"/, "", k); key = substr(k, 1, index(k, "\"") - 1)
+        rest = substr(line, RLENGTH + 1); sub(/[ \t]*,$/, "", rest)
+        if (rest ~ /^"([^"\\]|\\.)*"$/) printf "%s\tstring\t%s\n", key, unescape(substr(rest, 2, length(rest) - 2))
+        else if (rest == "true" || rest == "false") printf "%s\tbool\t%s\n", key, rest
+        else if (rest == "null") printf "%s\tnull\t\n", key
+        else printf "%s\tnumber\t%s\n", key, rest
+      }
+    }' "$1" 2>/dev/null
+}
+
+# One string field of a record, unescaped; empty when absent or not a string.
+scratch_owner_record_get() {  # <file> <key>
+  scratch_owner_record_dump "$1" | LC_ALL=C awk -F '\t' -v k="$2" '$1 == k && $2 == "string" { print $3; exit }'
+}
