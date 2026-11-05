@@ -66,6 +66,11 @@ PROTECT_EXTRA="$(scratch_config_get AI_SCRATCH_PROTECT)"
 # explicit `scratch-setup.sh --release`. Name-by-name pins (AI_SCRATCH_PROTECT)
 # cannot cover an entry that did not exist when the pin was written; a hold can.
 HOLD="$(scratch_config_get AI_SCRATCH_HOLD)"
+# Fail fast: an apply under a hold must not even enumerate the root, let alone
+# run git in every entry, before refusing.
+if [ "$APPLY" = 1 ] && [ -n "$HOLD" ]; then
+  scratch_die "apply is on hold: $HOLD — lift it with scratch-setup.sh --release" 3
+fi
 
 human() { awk -v k="$1" 'BEGIN{split("KB MB GB TB",u," ");i=1;while(k>=1024&&i<4){k/=1024;i++}printf "%.1f%s",k,u[i]}'; }
 
@@ -262,7 +267,6 @@ if [ "$APPLY" != 1 ]; then
 fi
 
 # --- apply ------------------------------------------------------------------
-[ -z "$HOLD" ] || scratch_die "apply is on hold: $HOLD — lift it with scratch-setup.sh --release" 3
 [ -n "$MANIFEST" ] || scratch_die "--apply requires --manifest <file> from a dry run" 2
 [ -f "$MANIFEST" ] || scratch_die "manifest not found: $MANIFEST"
 
