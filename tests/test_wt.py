@@ -226,6 +226,35 @@ class TestListAndFinish(WtFixture):
         self.assertIn("private-reflog", r.stderr)
         self.assertIn('"released": false', self.record())
 
+    def test_a_merged_pr_whose_head_is_this_head_counts_as_preserved(self):
+        # After a squash merge the remote branch is gone, so "on no remote" is
+        # true, but refs/pull/N/head keeps the commits; a gh shim reports the
+        # merged PR head and finish --release must accept it.
+        path, _ = self.start()
+        self.commit_in(path)
+        head = git(path, "rev-parse", "HEAD")
+        shim = self.tmp / "shim"
+        shim.mkdir()
+        (shim / "gh").write_text('#!/bin/sh\nprintf \'closed merged=true head=%s\\n\'\n' % head)
+        (shim / "gh").chmod(0o755)
+        env = dict(os.environ, AI_SCRATCH_CONFIG_DIR=str(self.cfg), WT_ROOT=str(self.wt_root),
+                   WT_PRIMARIES=str(self.primaries), WT_OWNER="session-A", PATH=f"{shim}{os.pathsep}{os.environ['PATH']}")
+        r = subprocess.run(["bash", str(WT), "finish", "demo", "task1", "--pr", "https://github.com/x/y/pull/7", "--release"],
+                           capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        rec = self.record()
+        self.assertIn('"released": true', rec)
+        self.assertIn('"preserved_by": "HEAD is the merged head of https://github.com/x/y/pull/7', rec)
+        self.assertIn('"pr_state": "closed merged=true head=%s"' % head, rec)
+        # A different merged head does not count.
+        (shim / "gh").write_text('#!/bin/sh\nprintf \'closed merged=true head=0000000\\n\'\n')
+        rec_path = self.owners / "demo" / "task1.json"
+        rec_path.write_text(rec_path.read_text().replace('"released": true', '"released": false'))   # reset the record
+        r = subprocess.run(["bash", str(WT), "finish", "demo", "task1", "--pr", "https://github.com/x/y/pull/7", "--release"],
+                           capture_output=True, text=True, env=env, timeout=60)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("NOT released", r.stderr)
+
     def test_the_sweep_consumes_the_records_wt_writes(self):
         done, _ = self.start("done")
         self.commit_in(done)

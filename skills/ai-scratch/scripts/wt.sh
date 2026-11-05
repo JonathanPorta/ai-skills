@@ -250,7 +250,7 @@ cmd_finish() {
   local branch head upstream dirty unpushed reflog_unreach=0 adm="" s
   branch="$(g -C "$wt" symbolic-ref -q --short HEAD 2>/dev/null || printf '(detached)')"
   head="$(g -C "$wt" rev-parse HEAD 2>/dev/null)" || die "cannot read HEAD in $wt"
-  upstream="$(g -C "$wt" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || printf '')"
+  upstream="$(g -C "$wt" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)" || upstream=""
   dirty="$(g -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
   unpushed="$(g -C "$wt" rev-list --count HEAD --not --remotes 2>/dev/null || printf '?')"
   if [ -n "$primary" ] && [ -d "$primary/.git/worktrees" ]; then
@@ -261,12 +261,27 @@ cmd_finish() {
       [ -z "$(g -C "$primary" rev-list --max-count=1 "$s" --not --remotes 2>/dev/null)" ] || reflog_unreach=$((reflog_unreach + 1))
     done
   fi
-  local pr_state=""
+  # A merged PR whose head is this HEAD preserves every commit of this branch on
+  # GitHub (refs/pull/N/head keeps them retrievable after a squash merge deletes
+  # the branch), so "on no remote-tracking ref" is not "unpreserved" in that case.
+  local pr_state="" pr_head="" merged_here=0
   if [ -n "$pr" ] && command -v gh >/dev/null 2>&1; then
     case "$pr" in *github.com/*/pull/*)
       local slug num; slug="$(printf '%s' "$pr" | sed -E 's#.*github\.com/([^/]+/[^/]+)/pull/.*#\1#')"; num="${pr##*/}"
-      pr_state="$(gh api "repos/$slug/pulls/$num" --jq '"\(.state) merged=\(.merged)"' 2>/dev/null || printf 'lookup failed')";;
+      pr_state="$(gh api "repos/$slug/pulls/$num" --jq '"\(.state) merged=\(.merged) head=\(.head.sha)"' 2>/dev/null)" || pr_state="lookup failed"
+      case "$pr_state" in *"merged=true head=$head"*) merged_here=1; pr_head="$head";; esac;;
     esac
+  fi
+  if [ "$merged_here" = 1 ]; then
+    unpushed=0
+    # Private-reflog commits that are ancestors of the merged head are preserved with it.
+    if [ -n "$adm" ] && [ -f "$adm/logs/HEAD" ]; then
+      reflog_unreach=0
+      for s in $(cut -d' ' -f2 "$adm/logs/HEAD" | sort -u); do
+        [ -z "$(g -C "$primary" rev-list --max-count=1 "$s" --not --remotes 2>/dev/null)" ] && continue
+        g -C "$primary" merge-base --is-ancestor "$s" "$pr_head" 2>/dev/null || reflog_unreach=$((reflog_unreach + 1))
+      done
+    fi
   fi
   local t; t="$(now)"
   {
@@ -281,13 +296,14 @@ cmd_finish() {
     printf 'upstream\tstring\t%s\n' "$upstream"
     printf 'dirty_at_finish\tnumber\t%s\n' "$dirty"
     printf 'unpushed_at_finish\tnumber\t%s\n' "${unpushed:-0}"
+    [ "$merged_here" = 1 ] && printf 'preserved_by\tstring\tHEAD is the merged head of %s (retrievable through refs/pull/%s/head)\n' "$pr" "${pr##*/}"
     printf 'private_reflog_unreachable_at_finish\tnumber\t%s\n' "$reflog_unreach"
   } >"$WT_TMP/ov"
   local blockers=""
   [ "$dirty" = 0 ] || blockers="$blockers${blockers:+; }$dirty uncommitted change(s)"
   [ "${unpushed:-1}" = 0 ] || blockers="$blockers${blockers:+; }$unpushed commit(s) on no remote"
   [ "$reflog_unreach" = 0 ] || blockers="$blockers${blockers:+; }$reflog_unreach private-reflog commit(s) reachable from no remote (give them a ref or bundle first)"
-  [ -n "$upstream" ] || blockers="$blockers${blockers:+; }no upstream branch (push it, or record the PR)"
+  [ -n "$upstream" ] || [ "$merged_here" = 1 ] || blockers="$blockers${blockers:+; }no upstream branch (push it, or record the merged PR)"
   if [ "$release" = 1 ]; then
     if [ -n "$blockers" ]; then
       update_record "$REC" "$WT_TMP/ov"
