@@ -98,8 +98,11 @@ classify() {  # <abs-path> <base-name>
   # linked worktree, or the environment names its objects. Deleting it would
   # break that other repository however clean, pushed and idle this one is
   # (this is how ai-usage-16 was removed from under ai-usage-17 on 2026-11-03).
+  # Matching is done in awk on whole lines with the path passed through the
+  # environment: a grep -F pattern containing a newline would split into two
+  # patterns, and the second ("/" or "") matches every line.
   local real; real="$(scratch_canonical "$path" 2>/dev/null)" || real="$path"
-  if grep -qxF -- "$real" "$LENDERS" || grep -qF -- "$real/" "$LENDERS"; then
+  if REAL="$real" awk 'BEGIN{r=ENVIRON["REAL"]} $0==r || index($0, r "/")==1 {f=1; exit} END{exit !f}' "$LENDERS"; then
     printf 'another repository depends on it (lender or worktree primary)'; return 0
   fi
   # The same check from the host's side, for worktrees the scan did not reach.
@@ -115,8 +118,10 @@ classify() {  # <abs-path> <base-name>
   # record fall through to the ordinary rules; a record is the only way to say
   # "mine, not done" without touching the entry.
   if [ -n "$OWNERS_DIR" ] && [ -d "$OWNERS_DIR" ]; then
-    local rec
-    rec="$(grep -rlF -- "\"$real\"" "$OWNERS_DIR" 2>/dev/null | head -1)"
+    local rec="" f
+    while IFS= read -r -d '' f; do
+      if REAL="$real" awk 'BEGIN{r="\"" ENVIRON["REAL"] "\""} index($0, r) {f=1; exit} END{exit !f}' "$f" 2>/dev/null; then rec="$f"; break; fi
+    done < <(find "$OWNERS_DIR" -type f -name '*.json' -print0 2>/dev/null)
     if [ -n "$rec" ] && ! grep -qE '"released":[[:space:]]*true' "$rec" 2>/dev/null; then
       printf 'owner record not released (%s)' "${rec##*/}"; return 0
     fi

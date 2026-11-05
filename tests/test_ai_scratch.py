@@ -26,7 +26,11 @@ OLD = "202601010000"
 
 def run(script: Path, *args: str, env_extra: dict | None = None, timeout: int = 60):
     env = dict(os.environ)
-    env.setdefault("AI_SCRATCH_CONFIG_DIR", tempfile.mkdtemp(prefix="scratch-cfg-"))
+    if "AI_SCRATCH_CONFIG_DIR" not in env:
+        cfg = tempfile.mkdtemp(prefix="scratch-cfg-")
+        # Isolate from the operator's real ownership records (default ~/devel/worktrees/.owners).
+        (Path(cfg) / "config").write_text(f"AI_SCRATCH_OWNERS = {cfg}/no-owners\n")
+        env["AI_SCRATCH_CONFIG_DIR"] = cfg
     env.pop("AI_SCRATCH_ROOT", None)
     if env_extra:
         env.update(env_extra)
@@ -1061,7 +1065,7 @@ class TestDependencyCoverage(ScratchFixture):
         self.shared(lender, outside / "borrower")
         backdate(self.root)
         self.assertRegex(self.sweep_env().stdout, r"FREE\s+lender\b")  # documented limit
-        (Path(self.cfg) / "config").write_text(f"AI_SCRATCH_LENDER_SCAN = {outside}\n")
+        (Path(self.cfg) / "config").write_text(f"AI_SCRATCH_LENDER_SCAN = {outside}\nAI_SCRATCH_OWNERS = {self.cfg}/no-owners\n")
         self.assertRegex(self.sweep_env("--verbose").stdout, r"KEEP\s+lender\s.*another repository depends on it")
 
     def test_worktree_outside_the_root_keeps_its_primary(self):
@@ -1106,7 +1110,7 @@ class TestDependencyCoverage(ScratchFixture):
         backdate(self.root)
         manifest = re.search(r"--manifest (\S+)", self.sweep_env().stdout).group(1)
         self.shared(lender, self.tmp / "late-borrower")
-        (Path(self.cfg) / "config").write_text(f"AI_SCRATCH_LENDER_SCAN = {self.tmp / 'late-borrower'}\n")
+        (Path(self.cfg) / "config").write_text(f"AI_SCRATCH_LENDER_SCAN = {self.tmp / 'late-borrower'}\nAI_SCRATCH_OWNERS = {self.cfg}/no-owners\n")
         result = self.sweep_env("--apply", "--manifest", manifest)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("dependency evidence changed", result.stderr)
