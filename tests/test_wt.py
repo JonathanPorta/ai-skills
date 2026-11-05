@@ -118,11 +118,11 @@ class TestStart(WtFixture):
         self.assertIn("released", r.stderr)
 
     def test_path_escapes_and_odd_names_are_refused(self):
-        for bad in ["../x", "a/b", "..", ".", "-flag", "with space", "nl\nname", "x\\y"]:
+        for bad in ["../x", "a/b", "..", ".", ".git", ".hidden", "-flag", "with space", "nl\nname", "x\\y"]:
             with self.subTest(task=bad):
                 r = self.wt("start", "demo", bad, "--no-fetch")
                 self.assertNotEqual(r.returncode, 0)
-                self.assertFalse((self.wt_root / "demo" / bad).exists() if "/" not in bad else False)
+                self.assertFalse((self.wt_root / "demo").exists() and any((self.wt_root / "demo").iterdir()))
         r = self.wt("start", "../demo", "task1", "--no-fetch")
         self.assertNotEqual(r.returncode, 0)
 
@@ -235,7 +235,7 @@ class TestListAndFinish(WtFixture):
         head = git(path, "rev-parse", "HEAD")
         shim = self.tmp / "shim"
         shim.mkdir()
-        (shim / "gh").write_text('#!/bin/sh\nprintf \'closed merged=true head=%s\\n\'\n' % head)
+        (shim / "gh").write_text('#!/bin/sh\necho "$@" >> "%s"\nprintf \'closed merged=true head=%s\\n\'\n' % (self.tmp / "gh-args", head))
         (shim / "gh").chmod(0o755)
         env = dict(os.environ, AI_SCRATCH_CONFIG_DIR=str(self.cfg), WT_ROOT=str(self.wt_root),
                    WT_PRIMARIES=str(self.primaries), WT_OWNER="session-A", PATH=f"{shim}{os.pathsep}{os.environ['PATH']}")
@@ -246,6 +246,8 @@ class TestListAndFinish(WtFixture):
         self.assertIn('"released": true', rec)
         self.assertIn('"preserved_by": "HEAD is the merged head of https://github.com/x/y/pull/7', rec)
         self.assertIn('"pr_state": "closed merged=true head=%s"' % head, rec)
+        self.assertIn("api repos/x/y/pulls/7 --jq", (self.tmp / "gh-args").read_text())
+        self.assertIn("fetch origin \"+refs/pull/7/head:refs/remotes/origin/pull/7/head\"", r.stdout)
         # A different merged head does not count.
         (shim / "gh").write_text('#!/bin/sh\nprintf \'closed merged=true head=0000000\\n\'\n')
         rec_path = self.owners / "demo" / "task1.json"
@@ -254,6 +256,92 @@ class TestListAndFinish(WtFixture):
                            capture_output=True, text=True, env=env, timeout=60)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("NOT released", r.stderr)
+
+    def test_a_later_finish_that_finds_unpreserved_work_withdraws_the_release(self):
+        path, _ = self.start()
+        self.commit_in(path)
+        git(path, "push", "-q", "-u", "origin", "HEAD")
+        self.assertEqual(self.wt("finish", "demo", "task1", "--release").returncode, 0)
+        self.assertIn('"released": true', self.record())
+        self.commit_in(path, "h")
+        git(path, "reset", "-q", "--hard", "origin/jp/f/task1")   # the commit survives only in the private reflog
+        r = self.wt("finish", "demo", "task1", "--release")
+        self.assertNotEqual(r.returncode, 0)
+        rec = self.record()
+        self.assertIn('"released": false', rec)
+        self.assertIn('"released_at": ""', rec)
+        self.assertIn('"private_reflog_unreachable_at_finish": 1', rec)
+
+    def test_a_failing_probe_does_not_destroy_the_record(self):
+        path, _ = self.start()
+        before = self.record()
+        # A dangling remote-tracking ref makes `rev-list --not --remotes` fail.
+        (self.primary / ".git" / "refs" / "remotes" / "origin" / "broken").write_text("0" * 40 + "\n")
+        r = self.wt("finish", "demo", "task1", "--release")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("cannot count", r.stderr)
+        self.assertEqual(self.record(), before)
+        self.assertEqual(self.wt("list").returncode, 0)
+
+    def test_the_reflog_check_does_not_depend_on_the_record_naming_the_primary(self):
+        path, _ = self.start()
+        self.commit_in(path)
+        git(path, "push", "-q", "-u", "origin", "HEAD")
+        self.commit_in(path, "h")
+        git(path, "reset", "-q", "--hard", "origin/jp/f/task1")
+        rec_path = self.owners / "demo" / "task1.json"
+        rec_path.write_text("\n".join(l for l in rec_path.read_text().splitlines() if '"primary"' not in l) + "\n")
+        r = self.wt("finish", "demo", "task1", "--release")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("private-reflog", r.stderr)
+        self.assertIn('"released": false', self.record())
+
+    def test_a_never_pushed_branch_records_no_upstream(self):
+        path, _ = self.start()
+        self.commit_in(path)
+        r = self.wt("finish", "demo", "task1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('"upstream": ""', self.record())
+        self.assertIn('"unpushed_at_finish": 1', self.record())
+
+    def test_the_worktree_root_may_not_be_the_primaries_directory(self):
+        env = dict(os.environ, AI_SCRATCH_CONFIG_DIR=str(self.cfg), WT_ROOT=str(self.primaries),
+                   WT_PRIMARIES=str(self.primaries), WT_OWNER="session-A")
+        r = subprocess.run(["bash", str(WT), "start", "demo", "tf", "--no-fetch"], capture_output=True, text=True, env=env)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertFalse((self.primary / "tf").exists())
+        self.assertEqual(git(self.primary, "status", "--porcelain"), "")
+
+    def test_a_missing_but_registered_worktree_is_reported_not_recreated(self):
+        path, _ = self.start()
+        shutil.rmtree(path)
+        r = self.wt("start", "demo", "task1", "--no-fetch")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("still registered", r.stderr)
+        self.assertIn("worktree remove", r.stderr)
+        self.assertFalse(path.exists())
+
+    def test_list_names_a_malformed_record(self):
+        (self.owners / "demo").mkdir(parents=True)
+        (self.owners / "demo" / "broken.json").write_text("not json\n")
+        out = self.wt("list").stdout
+        self.assertRegex(out, r"demo/broken\s.*MALFORMED\s+fix .*broken\.json")
+
+    def test_tilde_and_relative_roots_from_config(self):
+        home = self.tmp / "home"
+        home.mkdir()
+        (self.cfg / "config").write_text(f"AI_SCRATCH_OWNERS = {self.owners}\nWT_ROOT = ~/wtroot\n")
+        env = dict(os.environ, AI_SCRATCH_CONFIG_DIR=str(self.cfg), WT_PRIMARIES=str(self.primaries),
+                   WT_OWNER="session-A", HOME=str(home))
+        env.pop("WT_ROOT", None)
+        r = subprocess.run(["bash", str(WT), "start", "demo", "t1", "--no-fetch"], capture_output=True, text=True, env=env, cwd=str(self.tmp))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((home / "wtroot" / "demo" / "t1" / ".git").exists())
+        self.assertFalse((self.tmp / "~").exists())
+        (self.cfg / "config").write_text(f"AI_SCRATCH_OWNERS = {self.owners}\nWT_ROOT = relative/root\n")
+        r = subprocess.run(["bash", str(WT), "start", "demo", "t2", "--no-fetch"], capture_output=True, text=True, env=env, cwd=str(self.tmp))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertFalse((self.tmp / "relative").exists())
 
     def test_the_sweep_consumes_the_records_wt_writes(self):
         done, _ = self.start("done")

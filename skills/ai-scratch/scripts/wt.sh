@@ -25,8 +25,13 @@ here="$(cd "$(dirname "$0")" && pwd -P)"
 usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
 die() { printf 'wt: %s\n' "$1" >&2; exit "${2:-1}"; }
 
-WT_ROOT="${WT_ROOT:-$(scratch_config_get WT_ROOT)}"; WT_ROOT="${WT_ROOT:-$HOME/devel/worktrees/portaj}"
-WT_PRIMARIES="${WT_PRIMARIES:-$(scratch_config_get WT_PRIMARIES)}"; WT_PRIMARIES="${WT_PRIMARIES:-$HOME/devel/portaj}"
+expand_dir() {  # <value> <default>: tilde expanded, must be absolute
+  local d="$1"; [ -n "$d" ] || d="$2"
+  case "$d" in "~/"*) d="$HOME/${d#\~/}";; "~") d="$HOME";; esac
+  case "$d" in /*) printf '%s' "$d";; *) printf 'wt: %s must be an absolute path, got: %s\n' "$3" "$d" >&2; exit 2;; esac
+}
+WT_ROOT="$(expand_dir "${WT_ROOT:-$(scratch_config_get WT_ROOT)}" "$HOME/devel/worktrees/portaj" WT_ROOT)" || exit 2
+WT_PRIMARIES="$(expand_dir "${WT_PRIMARIES:-$(scratch_config_get WT_PRIMARIES)}" "$HOME/devel/portaj" WT_PRIMARIES)" || exit 2
 WT_BRANCH_PREFIX="${WT_BRANCH_PREFIX:-$(scratch_config_get WT_BRANCH_PREFIX)}"; WT_BRANCH_PREFIX="${WT_BRANCH_PREFIX:-jp/f/}"
 OWNERS_DIR="$(scratch_owners_dir)"
 export GIT_OPTIONAL_LOCKS=0 GIT_NO_LAZY_FETCH=1
@@ -34,7 +39,7 @@ g() { git -c core.fsmonitor=false -c gc.auto=0 "$@"; }
 
 name_ok() {  # plain directory name: no separators, no dot-dirs, no leading dash, no control chars
   scratch_text_is_sane "$1" || return 1
-  case "$1" in ''|.|..|-*|*/*|*\\*|*' '*) return 1;; esac
+  case "$1" in ''|.*|-*|*/*|*\\*|*' '*) return 1;; esac
   printf '%s' "$1" | LC_ALL=C grep -qE '^[A-Za-z0-9._-]+$'
 }
 now() { date +%Y-%m-%dT%H:%M:%S%z; }
@@ -56,9 +61,11 @@ write_record() {  # <file>
       esac
     done
     printf '\n}\n'
-  } >"$tmp" && mv "$tmp" "$f"
-  # Never leave a record the sweep would call malformed: that would freeze every apply.
-  case "$(scratch_owner_record_parse "$f")" in malformed*) rm -f "$f"; die "refused to write a malformed record";; esac
+  } >"$tmp" || { rm -f "$tmp"; die "cannot write $f"; }
+  # Never land a record the sweep would call malformed (that would freeze every
+  # apply), and never touch the live record until the new one is known good.
+  case "$(scratch_owner_record_parse "$tmp")" in malformed*) rm -f "$tmp"; die "refused to write a malformed record; $f left as it was";; esac
+  mv "$tmp" "$f" || { rm -f "$tmp"; die "cannot replace $f"; }
 }
 
 # dump + overrides (key<TAB>type<TAB>value, later wins) -> new record
@@ -112,12 +119,13 @@ cmd_start() {
   case "$target" in "$parent"/*) ;; *) die "path escape: $target is not under $parent";; esac
   [ -L "$target" ] && die "$target is a symlink; refusing"
   # The worktree root must not live inside the primary or vice versa.
-  case "$parent" in "$primary"/*) die "worktree root $parent is inside the primary $primary";; esac
+  case "$parent" in "$primary"|"$primary"/*) die "worktree root $parent is the primary $primary or inside it";; esac
   case "$primary" in "$parent"/*) die "primary $primary is inside the worktree root $parent";; esac
 
   if load_record "$repo" "$task"; then
     case "$REC_STATUS" in malformed) die "ownership record $REC is malformed; fix or remove it before reusing the task name";; esac
-    [ "$REC_WT" = "$target" ] || die "record $REC names a different worktree ($REC_WT); pick another task name"
+    local rec_real; rec_real="$(scratch_canonical "$REC_WT" 2>/dev/null)" || rec_real="$REC_WT"
+    [ "$rec_real" = "$target" ] || die "record $REC names a different worktree ($REC_WT); pick another task name"
     if [ "$REC_OWNER" != "$me" ]; then
       die "task $repo/$task is owned by '$REC_OWNER' (record $REC, $REC_STATUS); it is not yours to resume or take over. Pick another task name or have the owner release it."
     fi
@@ -129,6 +137,9 @@ cmd_start() {
       printf 'last_used\tstring\t%s\n' "$(now)" >"$WT_TMP/ov"; update_record "$REC" "$WT_TMP/ov"
       printf 'resumed %s\nWT_PATH=%s\nWT_BRANCH=%s\nWT_RECORD=%s\n' "$repo/$task" "$target" "$branch" "$REC"
       return 0
+    fi
+    if g -C "$primary" worktree list --porcelain | LC_ALL=C grep -qxF "worktree $target"; then
+      die "$target is gone but still registered in $primary. wt never removes registrations; run, as the owner, after checking nothing else needs it:  git -C '$primary' worktree remove '$target'   (then start again)"
     fi
     branch="${branch:-$(scratch_owner_record_get "$REC" branch)}"
     printf 'record exists but the worktree is gone; recreating it on %s\n' "$branch" >&2
@@ -156,7 +167,7 @@ cmd_start() {
   if g -C "$primary" show-ref -q --verify "refs/heads/$branch"; then
     g -C "$primary" worktree add -q "$target" "$branch" 2>"$WT_TMP/err" || die "git worktree add failed: $(tr '\n' ' ' <"$WT_TMP/err")"
   else
-    g -C "$primary" worktree add -q -b "$branch" "$target" "$base" 2>"$WT_TMP/err" || die "git worktree add failed: $(tr '\n' ' ' <"$WT_TMP/err")"
+    g -C "$primary" worktree add -q --no-track -b "$branch" "$target" "$base" 2>"$WT_TMP/err" || die "git worktree add failed: $(tr '\n' ' ' <"$WT_TMP/err")"
   fi
   [ "$(g -C "$primary" symbolic-ref -q HEAD 2>/dev/null || g -C "$primary" rev-parse HEAD)" = "$head_before" ] || die "the primary's checked-out branch changed; this must never happen"
   local url; url="$(g -C "$primary" remote get-url origin 2>/dev/null || printf '')"
@@ -177,9 +188,12 @@ cmd_start() {
     printf 'complete\tbool\tfalse\n'
     printf 'released\tbool\tfalse\n'
   } | write_record "$OWNERS_DIR/$repo/$task.json" || {
-    # A worktree without a record is exactly what the sweep must never see; undo the add we just made.
-    g -C "$primary" worktree remove "$target" >/dev/null 2>&1
-    die "could not write the ownership record; the new worktree was removed again"
+    # A worktree without a record is exactly what the sweep must never see; undo the add we just made
+    # (non-forced; it is the empty worktree created a moment ago; the branch stays).
+    if g -C "$primary" worktree remove "$target" >/dev/null 2>&1; then
+      die "could not write the ownership record; the new worktree was removed again (branch $branch stays)"
+    fi
+    die "could not write the ownership record AND could not remove the new worktree $target; remove it by hand"
   }
   printf 'started %s\nWT_PATH=%s\nWT_BRANCH=%s\nWT_BASE=%s\nWT_RECORD=%s\n' "$repo/$task" "$target" "$branch" "$base" "$OWNERS_DIR/$repo/$task.json"
 }
@@ -193,10 +207,10 @@ blockers_for() {  # <worktree> <primary> <status>; prints a comma list
   fi
   local n
   n="$(g -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"; [ "${n:-0}" = 0 ] || add "dirty ($n)"
-  n="$(g -C "$wt" rev-list --count HEAD --not --remotes 2>/dev/null)"; [ "${n:-0}" = 0 ] || add "unpushed ($n)"
+  n="$(g -C "$wt" rev-list --count HEAD --not --remotes 2>/dev/null)" || n="?"; [ "${n:-0}" = 0 ] || add "unpushed ($n)"
   [ -d "$wt/.git/worktrees" ] && add "hosts worktrees"
   [ -f "$wt/.git/objects/info/alternates" ] && add "borrows objects"
-  if LC_ALL=C grep -lsF "$wt" "$WT_PRIMARIES"/*/.git/objects/info/alternates "$WT_ROOT"/*/*/.git/objects/info/alternates 2>/dev/null | grep -q .; then add "lends objects"; fi
+  if LC_ALL=C grep -lsxF -e "$wt/.git/objects" -e "$wt/.git/objects/" "$WT_PRIMARIES"/*/.git/objects/info/alternates "$WT_ROOT"/*/*/.git/objects/info/alternates 2>/dev/null | grep -q .; then add "lends objects"; fi
   [ "$status" = released ] && add "awaiting cleanup"
   printf '%s' "$out"
 }
@@ -206,8 +220,10 @@ cmd_list() {
   local idx="$WT_TMP/idx"
   scratch_owner_index "$OWNERS_DIR" "$idx" || printf 'wt: some records are malformed (the sweep keeps everything until they are fixed)\n' >&2
   printf '%-28s %-24s %-34s %-14s %-18s %-10s %s\n' "REPO/TASK" "OWNER" "BRANCH" "PR" "ACTIVITY" "STATE" "BLOCKERS"
-  while IFS=$'\t' read -r status wthex filehex; do
-    local wt file; wt="$(scratch_hex_decode "$wthex")"; file="$(scratch_hex_decode "$filehex")"
+  while IFS= read -r line; do
+    local status wthex filehex wt file rest
+    status="${line%%	*}"; rest="${line#*	}"; wthex="${rest%%	*}"; filehex="${rest#*	}"
+    wt="$(scratch_hex_decode "$wthex")"; file="$(scratch_hex_decode "$filehex")"
     local repo task owner branch pr activity state blockers primary complete
     repo="$(basename "$(dirname "$file")")"; task="$(basename "$file" .json)"
     [ -z "$only" ] || [ "$repo" = "$only" ] || continue
@@ -250,35 +266,43 @@ cmd_finish() {
   local branch head upstream dirty unpushed reflog_unreach=0 adm="" s
   branch="$(g -C "$wt" symbolic-ref -q --short HEAD 2>/dev/null || printf '(detached)')"
   head="$(g -C "$wt" rev-parse HEAD 2>/dev/null)" || die "cannot read HEAD in $wt"
+  # The upstream is evidence only when it actually contains HEAD (a branch cut
+  # with tracking from origin/main would otherwise "have an upstream" unpushed).
   upstream="$(g -C "$wt" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)" || upstream=""
+  if [ -n "$upstream" ] && ! g -C "$wt" merge-base --is-ancestor "$head" "$upstream" 2>/dev/null; then upstream=""; fi
   dirty="$(g -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
-  unpushed="$(g -C "$wt" rev-list --count HEAD --not --remotes 2>/dev/null || printf '?')"
-  if [ -n "$primary" ] && [ -d "$primary/.git/worktrees" ]; then
-    for s in "$primary"/.git/worktrees/*/gitdir; do [ "$(cat "$s" 2>/dev/null)" = "$wt/.git" ] && adm="$(dirname "$s")"; done
-  fi
+  unpushed="$(g -C "$wt" rev-list --count HEAD --not --remotes 2>/dev/null)" || die "cannot count commits on no remote in $wt (git rev-list failed); nothing recorded"
+  # The worktree's private HEAD reflog lives in its admin dir; ask git where that is
+  # rather than trusting the record's spelling of the primary.
+  adm="$(g -C "$wt" rev-parse --absolute-git-dir 2>/dev/null)" || adm=""
+  [ -n "$primary" ] || primary="$(g -C "$wt" rev-parse --git-common-dir 2>/dev/null)"; primary="${primary%/.git}"
+  # A rev-list that fails counts the commit as unreachable: an error is not evidence.
+  unreachable() { local out; out="$(g -C "$primary" rev-list --max-count=1 "$1" --not --remotes 2>/dev/null)" || return 0; [ -n "$out" ]; }
   if [ -n "$adm" ] && [ -f "$adm/logs/HEAD" ]; then
-    for s in $(cut -d' ' -f2 "$adm/logs/HEAD" | sort -u); do
-      [ -z "$(g -C "$primary" rev-list --max-count=1 "$s" --not --remotes 2>/dev/null)" ] || reflog_unreach=$((reflog_unreach + 1))
-    done
+    for s in $(cut -d' ' -f2 "$adm/logs/HEAD" | sort -u); do unreachable "$s" && reflog_unreach=$((reflog_unreach + 1)); done
   fi
   # A merged PR whose head is this HEAD preserves every commit of this branch on
   # GitHub (refs/pull/N/head keeps them retrievable after a squash merge deletes
   # the branch), so "on no remote-tracking ref" is not "unpreserved" in that case.
-  local pr_state="" pr_head="" merged_here=0
+  # gh is PATH-resolved and the PR URL is owner-supplied: this is the owner's
+  # statement, like --owner, not an independent check.
+  [ -n "$pr" ] || pr="$(scratch_owner_record_get "$REC" pr)"
+  local pr_state="" pr_head="" merged_here=0 preserved_by="" pr_num=""
   if [ -n "$pr" ] && command -v gh >/dev/null 2>&1; then
     case "$pr" in *github.com/*/pull/*)
-      local slug num; slug="$(printf '%s' "$pr" | sed -E 's#.*github\.com/([^/]+/[^/]+)/pull/.*#\1#')"; num="${pr##*/}"
-      pr_state="$(gh api "repos/$slug/pulls/$num" --jq '"\(.state) merged=\(.merged) head=\(.head.sha)"' 2>/dev/null)" || pr_state="lookup failed"
+      local slug; slug="$(printf '%s' "$pr" | sed -E 's#.*github\.com/([^/]+/[^/]+)/pull/.*#\1#')"; pr_num="${pr##*/}"
+      pr_state="$(gh api "repos/$slug/pulls/$pr_num" --jq '"\(.state) merged=\(.merged) head=\(.head.sha)"' 2>/dev/null)" || pr_state="lookup failed"
       case "$pr_state" in *"merged=true head=$head"*) merged_here=1; pr_head="$head";; esac;;
     esac
   fi
   if [ "$merged_here" = 1 ]; then
     unpushed=0
+    preserved_by="HEAD is the merged head of $pr (retrievable through refs/pull/$pr_num/head)"
     # Private-reflog commits that are ancestors of the merged head are preserved with it.
     if [ -n "$adm" ] && [ -f "$adm/logs/HEAD" ]; then
       reflog_unreach=0
       for s in $(cut -d' ' -f2 "$adm/logs/HEAD" | sort -u); do
-        [ -z "$(g -C "$primary" rev-list --max-count=1 "$s" --not --remotes 2>/dev/null)" ] && continue
+        unreachable "$s" || continue
         g -C "$primary" merge-base --is-ancestor "$s" "$pr_head" 2>/dev/null || reflog_unreach=$((reflog_unreach + 1))
       done
     fi
@@ -288,15 +312,15 @@ cmd_finish() {
     printf 'complete\tbool\ttrue\n'
     printf 'completed_at\tstring\t%s\n' "$t"
     printf 'last_used\tstring\t%s\n' "$t"
-    [ -z "$pr" ] || printf 'pr\tstring\t%s\n' "$pr"
-    [ -z "$pr_state" ] || printf 'pr_state\tstring\t%s\n' "$pr_state"
+    printf 'pr\tstring\t%s\n' "$pr"
+    printf 'pr_state\tstring\t%s\n' "$pr_state"
     [ -z "$note" ] || printf 'note\tstring\t%s\n' "$note"
     printf 'head_at_finish\tstring\t%s\n' "$head"
     printf 'branch\tstring\t%s\n' "$branch"
     printf 'upstream\tstring\t%s\n' "$upstream"
     printf 'dirty_at_finish\tnumber\t%s\n' "$dirty"
     printf 'unpushed_at_finish\tnumber\t%s\n' "${unpushed:-0}"
-    [ "$merged_here" = 1 ] && printf 'preserved_by\tstring\tHEAD is the merged head of %s (retrievable through refs/pull/%s/head)\n' "$pr" "${pr##*/}"
+    printf 'preserved_by\tstring\t%s\n' "$preserved_by"
     printf 'private_reflog_unreachable_at_finish\tnumber\t%s\n' "$reflog_unreach"
   } >"$WT_TMP/ov"
   local blockers=""
@@ -304,32 +328,41 @@ cmd_finish() {
   [ "${unpushed:-1}" = 0 ] || blockers="$blockers${blockers:+; }$unpushed commit(s) on no remote"
   [ "$reflog_unreach" = 0 ] || blockers="$blockers${blockers:+; }$reflog_unreach private-reflog commit(s) reachable from no remote (give them a ref or bundle first)"
   [ -n "$upstream" ] || [ "$merged_here" = 1 ] || blockers="$blockers${blockers:+; }no upstream branch (push it, or record the merged PR)"
-  if [ "$release" = 1 ]; then
-    if [ -n "$blockers" ]; then
-      update_record "$REC" "$WT_TMP/ov"
-      die "recorded completion, but NOT released: $blockers. Fix those and run finish --release again."
-    fi
+  # Every finish states released explicitly: a stale "released": true from an
+  # earlier run must never survive a later finish that found unpreserved work.
+  if [ "$release" = 1 ] && [ -z "$blockers" ]; then
     printf 'released\tbool\ttrue\n' >>"$WT_TMP/ov"
     printf 'released_at\tstring\t%s\n' "$t" >>"$WT_TMP/ov"
+  else
+    printf 'released\tbool\tfalse\n' >>"$WT_TMP/ov"
+    printf 'released_at\tstring\t\n' >>"$WT_TMP/ov"
+  fi
+  if [ "$release" = 1 ] && [ -n "$blockers" ]; then
+    update_record "$REC" "$WT_TMP/ov"
+    die "recorded completion, but NOT released: $blockers. Fix those and run finish --release again."
   fi
   update_record "$REC" "$WT_TMP/ov"
   printf 'recorded %s for %s/%s (record %s)\n' "$([ "$release" = 1 ] && printf 'completion + release' || printf 'completion')" "$repo" "$task" "$REC"
   printf '  head %s  branch %s  upstream %s  dirty %s  unpushed %s  private-reflog unreachable %s%s\n' "${head:0:7}" "$branch" "${upstream:-none}" "$dirty" "$unpushed" "$reflog_unreach" "${pr_state:+  PR $pr_state}"
   [ -z "$blockers" ] || printf '  preservation blockers: %s\n' "$blockers"
-  cat <<EOF
-
-# Cleanup plan for $wt (NOTHING below was executed; wt never deletes)
-# Re-check seconds before removal, in this order, and stop on the first failure:
-git -C ${primary:-<primary>} worktree list --porcelain | grep -qxF 'worktree $wt'      # still registered, not locked
-[ -z "\$(git -C '$wt' status --porcelain)" ]                                      # clean
-[ "\$(git -C '$wt' rev-list --count HEAD --not --remotes)" = 0 ]                   # every commit on a remote
-[ ! -d '$wt/.git/worktrees' ] && ! grep -lsF '$wt' $WT_PRIMARIES/*/.git/objects/info/alternates   # hosts nothing, lends nothing
-grep -q '"released": true' '$REC'                                                  # the owner has released it
-# then, and only then, the non-forced removal (never --force, never prune, never gc):
-git -C ${primary:-<primary>} worktree remove '$wt'
-# the branch '$branch' stays in the primary; delete it separately only after the PR is merged, by hand.
-EOF
+  local q_wt q_rec q_primary; q_wt="$(shq "$wt")"; q_rec="$(shq "$REC")"; q_primary="$(shq "${primary:-<primary>}")"
+  printf '\n# Cleanup plan for %s (NOTHING below was executed; wt never deletes)\n' "$wt"
+  printf '# Re-check seconds before removal, in this order, and stop on the first failure:\n'
+  printf 'git -C %s worktree list --porcelain | grep -A3 -xF "worktree $(printf %%s %s)" | grep -q . && ! git -C %s worktree list --porcelain | grep -A3 -xF "worktree $(printf %%s %s)" | grep -qx locked   # registered, not locked\n' "$q_primary" "$q_wt" "$q_primary" "$q_wt"
+  printf '[ -z "$(git -C %s status --porcelain)" ]   # clean\n' "$q_wt"
+  if [ "$merged_here" = 1 ]; then
+    printf 'git -C %s fetch origin "+refs/pull/%s/head:refs/remotes/origin/pull/%s/head"   # the merged PR head, so the next check (and the sweep) can see the commits are on a remote\n' "$q_primary" "$pr_num" "$pr_num"
+  fi
+  printf '[ "$(git -C %s rev-list --count HEAD --not --remotes)" = 0 ]   # every commit on a remote\n' "$q_wt"
+  printf '[ ! -d %s ] && ! grep -lsxF -e %s %s/*/.git/objects/info/alternates   # hosts nothing, lends nothing\n' "$(shq "$wt/.git/worktrees")" "$(shq "$wt/.git/objects")" "$(shq "$WT_PRIMARIES")"
+  printf 'grep -q %s %s   # the owner has released it\n' "$(shq '"released": true')" "$q_rec"
+  printf '# then, and only then, the non-forced removal (never --force, never prune, never gc):\n'
+  printf 'git -C %s worktree remove %s\n' "$q_primary" "$q_wt"
+  printf '# the branch %s stays in the primary; delete it separately only after the PR is merged, by hand. The record stays as history.\n' "$(shq "$branch")"
 }
+
+# Single-quote a value for a shell plan.
+shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 WT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/wt.XXXXXX")" || die "no temp dir"
 trap 'rm -rf "$WT_TMP"' EXIT

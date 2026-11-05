@@ -182,7 +182,8 @@ exclusion is not.
 
 Agent task worktrees have one lifecycle, and it writes the ownership records the
 sweep reads, so a worktree started this way is never reclaimed behind its
-owner's back and is reclaimable the moment its owner releases it.
+owner's back, and once its owner releases it the sweep's remaining rules (idle,
+clean, every commit on a remote, no dependency, no hold) decide.
 
 ```bash
 export WT_OWNER="<session id>"                       # once per session; two sessions must never look alike
@@ -211,7 +212,16 @@ scripts/wt.sh finish <repo> <task> [--pr URL] [--note TEXT] [--release]
   (or the sweep, once the record is complete + released and the hold is lifted).
 
 `WT_ROOT`, `WT_PRIMARIES` and `WT_BRANCH_PREFIX` (default `jp/f/`) can be set in
-the environment or in `~/.ai-scratch/config`.
+the environment or in `~/.ai-scratch/config` (absolute paths; `~/` expands).
+Things to know: with `WT_OWNER` unset the owner is `user@host`, so two sessions
+look alike; `--owner` and `--pr` are the owner's statements, not checks (a merged
+PR whose head is this HEAD counts as preservation after a squash merge deletes
+the branch); `start` fetches from origin, which updates the primary's
+remote-tracking refs and nothing else; one malformed record anywhere under the
+ownership directory stops every `start` until it is fixed; released records
+stay behind as history after the worktree is removed (delete them by hand when
+the primary no longer lists the worktree); the plan `finish` prints is the
+whole removal procedure, and it is never run for you.
 
 ## Safety properties worth knowing
 
