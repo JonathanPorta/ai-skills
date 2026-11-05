@@ -569,6 +569,9 @@ class TestReportingDoesNotDisturbWhatItReports(ScratchFixture):
         """A repo that is clean and fully pushed, so it IS reclaimable."""
         remote = self.tmp / f"{name}.git"
         subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+        # CI runners may default to "master"; the push below creates "main", so point HEAD there
+        # or the clone has nothing to check out.
+        git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
         repo = self.root / name
         new_repo(repo)
         git(repo, "remote", "add", "origin", str(remote))
@@ -619,6 +622,9 @@ class TestGitMetadataIsNotUserActivity(ScratchFixture):
     def _pushed_repo(self, name: str):
         remote = self.tmp / f"{name}.git"
         subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+        # CI runners may default to "master"; the push below creates "main", so point HEAD there
+        # or the clone has nothing to check out.
+        git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
         repo = self.root / name
         new_repo(repo)
         git(repo, "remote", "add", "origin", str(remote))
@@ -956,6 +962,9 @@ class TestHoldAndDependencyGuards(ScratchFixture):
     def _pushed_clone(self, name: str) -> Path:
         remote = self.tmp / f"{name}.git"
         subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+        # CI runners may default to "master"; the push below creates "main", so point HEAD there
+        # or the clone has nothing to check out.
+        git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
         src = self.tmp / f"{name}-src"
         new_repo(src)
         git(src, "remote", "add", "origin", str(remote))
@@ -1009,6 +1018,9 @@ class TestDependencyCoverage(ScratchFixture):
     def pushed(self, where: Path, name: str) -> Path:
         remote = self.tmp / f"{name}.git"
         subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+        # CI runners may default to "master"; the push below creates "main", so point HEAD there
+        # or the clone has nothing to check out.
+        git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
         src = self.tmp / f"{name}-src"
         new_repo(src)
         git(src, "remote", "add", "origin", str(remote))
