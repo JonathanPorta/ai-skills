@@ -20,6 +20,9 @@ boring.
   asks before writing anything.
 - `scripts/scratch-sweep.sh` — reports reclaimable entries; deletes only with
   `--apply`.
+- `scripts/wt.sh` — `start` / `list` / `finish` for agent task worktrees under
+  `~/devel/worktrees/portaj/<repo>/<task>`; writes the ownership records the
+  sweep consumes and never deletes anything.
 
 ## Configuration
 

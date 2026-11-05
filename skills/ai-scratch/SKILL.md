@@ -178,6 +178,51 @@ exclusion is not.
   cleanup of such a worktree requires the record to say complete and released. No unique work may live
   only under `/private/tmp`: give it a ref in the common dir before the session ends.
 
+## Task worktrees (`wt.sh`)
+
+Agent task worktrees have one lifecycle, and it writes the ownership records the
+sweep reads, so a worktree started this way is never reclaimed behind its
+owner's back, and once its owner releases it the sweep's remaining rules (idle,
+clean, every commit on a remote, no dependency, no hold) decide.
+
+```bash
+export WT_OWNER="<session id>"                       # once per session; two sessions must never look alike
+scripts/wt.sh start <repo> <task> [--branch B] [--base REF] [--purpose TEXT]
+scripts/wt.sh list [<repo>]
+scripts/wt.sh finish <repo> <task> [--pr URL] [--note TEXT] [--release]
+```
+
+- `start` creates `~/devel/worktrees/portaj/<repo>/<task>` from the canonical
+  primary `~/devel/portaj/<repo>` (`git worktree add`, after a fetch) and writes
+  `~/devel/worktrees/.owners/<repo>/<task>.json`. It never switches the primary's
+  branch, never clones, never borrows objects (a primary with `alternates` is
+  refused), and never places work under `/private/tmp`. The same owner resumes
+  with the same command; another owner is refused, an existing directory without
+  a record is refused, a released task name is refused, and `..`, `/`, spaces or
+  control characters in a name are refused.
+- `list` shows owner, branch, PR, last activity, state (ACTIVE / COMPLETE /
+  RELEASED) and blockers: dirty, unpushed, missing, unregistered, hosts
+  worktrees, lends or borrows objects, awaiting cleanup, malformed record.
+- `finish` records completion plus the preservation evidence (HEAD, upstream,
+  dirty count, commits on no remote, private-reflog commits on no remote, PR
+  state when `gh` can see it). `--release` sets `"released": true` only when
+  there is nothing unpreserved; otherwise it records completion and says what
+  blocks the release. It then prints the exact cleanup plan and **deletes
+  nothing**: removal stays in the verified, non-forced `git worktree remove` flow
+  (or the sweep, once the record is complete + released and the hold is lifted).
+
+`WT_ROOT`, `WT_PRIMARIES` and `WT_BRANCH_PREFIX` (default `jp/f/`) can be set in
+the environment or in `~/.ai-scratch/config` (absolute paths; `~/` expands).
+Things to know: with `WT_OWNER` unset the owner is `user@host`, so two sessions
+look alike; `--owner` and `--pr` are the owner's statements, not checks (a merged
+PR whose head is this HEAD counts as preservation after a squash merge deletes
+the branch); `start` fetches from origin, which updates the primary's
+remote-tracking refs and nothing else; one malformed record anywhere under the
+ownership directory stops every `start` until it is fixed; released records
+stay behind as history after the worktree is removed (delete them by hand when
+the primary no longer lists the worktree); the plan `finish` prints is the
+whole removal procedure, and it is never run for you.
+
 ## Safety properties worth knowing
 
 Both scripts share one definition of a safe root, so setup cannot persist a root
