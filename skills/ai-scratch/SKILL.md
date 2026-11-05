@@ -189,7 +189,8 @@ clean, every commit on a remote, no dependency, no hold) decide.
 export WT_OWNER="<session id>"                       # once per session; two sessions must never look alike
 scripts/wt.sh start <repo> <task> [--branch B] [--base REF] [--purpose TEXT]
 scripts/wt.sh list [<repo>]
-scripts/wt.sh finish <repo> <task> [--pr URL] [--note TEXT] [--release]
+scripts/wt.sh finish <repo> <task> [--pr URL] [--note TEXT] [--bundle FILE] [--release] [--no-fetch]
+scripts/wt.sh check  <repo> <task> [--for-removal] [--no-fetch]
 ```
 
 - `start` creates `~/devel/worktrees/portaj/<repo>/<task>` from the canonical
@@ -203,20 +204,38 @@ scripts/wt.sh finish <repo> <task> [--pr URL] [--note TEXT] [--release]
 - `list` shows owner, branch, PR, last activity, state (ACTIVE / COMPLETE /
   RELEASED) and blockers: dirty, unpushed, missing, unregistered, hosts
   worktrees, lends or borrows objects, awaiting cleanup, malformed record.
-- `finish` records completion plus the preservation evidence (HEAD, upstream,
-  dirty count, commits on no remote, private-reflog commits on no remote, PR
-  state when `gh` can see it). `--release` sets `"released": true` only when
-  there is nothing unpreserved; otherwise it records completion and says what
-  blocks the release. It then prints the exact cleanup plan and **deletes
-  nothing**: removal stays in the verified, non-forced `git worktree remove` flow
-  (or the sweep, once the record is complete + released and the hold is lifted).
+- `finish` records completion plus the preservation evidence. Required history
+  is HEAD plus every commit in the worktree's private reflog; each is preserved
+  only when, checked against the **current** state, it is reachable from the
+  remote default branch (fetched now), or from the live tip of its branch on
+  origin, or a local `refs/keep/*` ref reaches it **and** the bundle named by
+  `--bundle` contains it (the bundle is restored into an empty repository
+  offline on every check; its sha256 is recorded). A merged PR's head ref, a
+  stale remote-tracking ref or a note is not evidence. `--release` sets
+  `"released": true` only when nothing is unpreserved and the worktree is
+  clean, hosts and lends nothing and has no nested repository; otherwise it
+  records completion, names the blockers and prints the exact `update-ref` /
+  `bundle create` commands that would preserve the unpublished commits locally
+  (nothing is pushed). It then prints the cleanup plan and **deletes nothing**.
+- `check <repo> <task> --for-removal` is the validator the plan runs and the
+  same gate list `finish --release` uses: record complete (and released),
+  repository as git reports it (a record naming another primary fails),
+  registered, not locked, clean, hosts and lends nothing, no nested repository,
+  every required commit preserved. The plan is that one command followed by the
+  non-forced `git worktree remove`; removal stays in that flow. `--no-fetch`
+  assesses offline, so only keep refs + bundle count; `finish`/`check` otherwise
+  fetch origin's default branch (and the task branch when needed) into the
+  primary's remote-tracking refs, which is the only thing they write besides the
+  record. A worktree released on keep refs + bundle is cleaned only through the
+  printed plan: the sweep's own "every commit on a remote" rule treats
+  `refs/keep/*` as local-only history and keeps every worktree of that primary.
 
-`WT_ROOT`, `WT_PRIMARIES` and `WT_BRANCH_PREFIX` (default `jp/f/`) can be set in
-the environment or in `~/.ai-scratch/config` (absolute paths; `~/` expands).
+`WT_ROOT`, `WT_PRIMARIES`, `WT_BUNDLES` (default `~/devel/recovery/bundles`) and
+`WT_BRANCH_PREFIX` (default `jp/f/`) can be set in the environment or in
+`~/.ai-scratch/config` (absolute paths; `~/` expands).
 Things to know: with `WT_OWNER` unset the owner is `user@host`, so two sessions
-look alike; `--owner` and `--pr` are the owner's statements, not checks (a merged
-PR whose head is this HEAD counts as preservation after a squash merge deletes
-the branch); `start` fetches from origin, which updates the primary's
+look alike; `--owner` is the owner's statement, not a check, and `--pr` is informational
+(a merged PR's head ref is not preservation); `start` fetches from origin, which updates the primary's
 remote-tracking refs and nothing else; one malformed record anywhere under the
 ownership directory stops every `start` until it is fixed; released records
 stay behind as history after the worktree is removed (delete them by hand when
