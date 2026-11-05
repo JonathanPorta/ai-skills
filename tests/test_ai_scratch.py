@@ -67,12 +67,36 @@ class ScratchFixture(unittest.TestCase):
         # Two levels deep so the root passes the component-count safety rule.
         self.root = self.tmp / "a" / "b" / "root"
         self.root.mkdir(parents=True)
+        # Every fixture gets its own config and ownership directory. Nothing is
+        # reclaimable without a released record, so tests that expect an entry
+        # to be offered call release() for it; the operator's real records
+        # (default ~/devel/worktrees/.owners) are never consulted.
+        self.owners = self.tmp / "owners"
+        self.owners.mkdir()
+        self.cfg = tempfile.mkdtemp(prefix="scratch-cfg-")
+        self.write_config()
+        self.env = {"AI_SCRATCH_CONFIG_DIR": self.cfg}
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)
+        shutil.rmtree(self.cfg, ignore_errors=True)
+
+    def write_config(self, extra: str = "") -> None:
+        (Path(self.cfg) / "config").write_text(f"AI_SCRATCH_OWNERS = {self.owners}\n{extra}")
+
+    def release(self, *names: str, complete: bool = True, released: bool = True,
+                record: str | None = None) -> None:
+        """Write a complete + released ownership record for each root entry."""
+        for name in names:
+            real = os.path.realpath(self.root / name)
+            text = record if record is not None else (
+                '{\n  "worktree": "%s",\n  "complete": %s,\n  "released": %s\n}\n'
+                % (real.replace("\\", "\\\\").replace('"', '\\"'),
+                   "true" if complete else "false", "true" if released else "false"))
+            (self.owners / f"{abs(hash(name))}.json").write_text(text)
 
     def sweep(self, *args: str):
-        return run(SWEEP, "--root", str(self.root), *args)
+        return run(SWEEP, "--root", str(self.root), *args, env_extra=self.env)
 
     def manifest_from_dry_run(self) -> str:
         out = self.sweep().stdout
@@ -92,6 +116,7 @@ class TestFilenameSafety(ScratchFixture):
         (self.root / ".prrq\n+0").mkdir()
         (self.root / "reclaimable").mkdir()
         backdate(self.root)
+        self.release("reclaimable")
 
         manifest = self.manifest_from_dry_run()
         self.sweep("--apply", "--manifest", manifest)
@@ -103,9 +128,12 @@ class TestFilenameSafety(ScratchFixture):
         for name in ["tab\tname", "glob*name", "space name", "..prefix", "plain"]:
             (self.root / name).mkdir()
         backdate(self.root)
+        self.release("glob*name", "space name", "plain")
 
-        out = self.sweep().stdout
-        # Hidden entries are kept; the rest are offered exactly once each.
+        out = self.sweep("--verbose").stdout
+        # Hidden entries are kept; every name is listed exactly once, rendered
+        # inert. (A name with a control character can never carry a release
+        # record, so it is kept and shown on a KEEP line.)
         self.assertIn("tab\\x09name", out)   # rendered inert, not raw
         self.assertIn("glob*name", out)
         self.assertIn("space name", out)
@@ -174,6 +202,7 @@ class TestKeepGuards(ScratchFixture):
         git(repo, "remote", "add", "origin", str(remote))
         git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
         backdate(self.root)
+        self.release("pushed")
 
         self.assertIn("FREE  pushed", self.sweep().stdout)
 
@@ -186,6 +215,7 @@ class TestApplyIsBoundToApproval(ScratchFixture):
         (self.root / "old-one").mkdir()
         (self.root / "old-two").mkdir()
         backdate(self.root)
+        self.release("old-one", "old-two")
 
     def test_apply_requires_a_manifest(self):
         result = self.sweep("--apply")
@@ -196,6 +226,7 @@ class TestApplyIsBoundToApproval(ScratchFixture):
         manifest = self.manifest_from_dry_run()
         (self.root / "snuck-in").mkdir()
         subprocess.run(["touch", "-t", OLD, str(self.root / "snuck-in")], capture_output=True)
+        self.release("snuck-in")
 
         result = self.sweep("--apply", "--manifest", manifest)
         self.assertNotEqual(result.returncode, 0)
@@ -344,17 +375,21 @@ class TestReviewSurfaceIntegrity(ScratchFixture):
         (self.root / "esc\x1b[31mred").mkdir()
         (self.root / "normal").mkdir()
         backdate(self.root)
+        self.release("normal")
 
-        out = self.sweep().stdout
+        out = self.sweep("--verbose").stdout
         lines = [ln for ln in out.splitlines() if ln.startswith("  FREE  ")]
-        self.assertEqual(len(lines), 3, "a name forged an extra proposal line")
-        self.assertIn("reclaim       3", out)
+        self.assertEqual(len(lines), 1, "a name forged an extra proposal line")
+        self.assertIn("reclaim       1", out)
+        self.assertIn("forged\\x0aFREE  fake-entry", out)
         self.assertNotIn("\x1b[31m", out, "an escape sequence reached the terminal raw")
 
     def test_manifest_records_are_structurally_exact(self):
         (self.root / "weird\nname").mkdir()
         (self.root / "plain").mkdir()
+        (self.root / "space name").mkdir()
         backdate(self.root)
+        self.release("plain", "space name")
 
         manifest = Path(self.manifest_from_dry_run()).read_text()
         records = [ln for ln in manifest.splitlines() if ln.startswith("candidate\t")]
@@ -365,6 +400,7 @@ class TestReviewSurfaceIntegrity(ScratchFixture):
     def test_malformed_manifest_record_is_refused(self):
         (self.root / "old").mkdir()
         backdate(self.root)
+        self.release("old")
         manifest = Path(self.manifest_from_dry_run())
         manifest.write_text(manifest.read_text() + "candidate\tnothex\tbad\tx\n")
 
@@ -402,7 +438,7 @@ class TestPortabilityAndFraming(ScratchFixture):
         (self.root / "a\nbc").mkdir()
         (self.root / "ab\nc").mkdir()
         backdate(self.root)
-        out = self.sweep().stdout
+        out = self.sweep("--verbose").stdout
         self.assertIn("a\\x0abc", out)
         self.assertIn("ab\\x0ac", out)
 
@@ -412,6 +448,7 @@ class TestPortabilityAndFraming(ScratchFixture):
         (self.root / "idle-a").mkdir()
         (self.root / "idle-b").mkdir()
         backdate(self.root)
+        self.release("idle-a", "idle-b")
         manifest = self.manifest_from_dry_run()
         result = self.sweep("--apply", "--manifest", manifest)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -420,6 +457,7 @@ class TestPortabilityAndFraming(ScratchFixture):
     def test_malformed_record_inside_the_checksummed_body_is_refused(self):
         (self.root / "old").mkdir()
         backdate(self.root)
+        self.release("old")
         manifest = Path(self.manifest_from_dry_run())
         lines = manifest.read_text().splitlines()
         body = [ln for ln in lines if not ln.startswith("sum\t")]
@@ -435,14 +473,22 @@ class TestPortabilityAndFraming(ScratchFixture):
         self.assertIn("malformed", result.stderr)
         self.assertTrue((self.root / "old").exists())
 
-    def test_name_with_a_trailing_newline_round_trips(self):
+    def test_name_with_trailing_whitespace_round_trips(self):
+        # A name ending in a space survives the hex round trip and the record
+        # match; a name ending in a newline can never carry a release record
+        # (control characters are refused), so it is kept, never mistargeted.
+        (self.root / "trailing ").mkdir()
         (self.root / "trailing\n").mkdir()
         (self.root / "other").mkdir()
         backdate(self.root)
+        self.release("trailing ", "other")
+        out = self.sweep("--verbose").stdout
+        self.assertRegex(out, r"KEEP\s+trailing\\x0a\s.*no ownership record")
         manifest = self.manifest_from_dry_run()
         self.sweep("--apply", "--manifest", manifest)
-        self.assertFalse((self.root / "trailing\n").exists(),
-                         "a trailing newline was lost, so apply targeted the wrong path")
+        self.assertFalse((self.root / "trailing ").exists(),
+                         "a trailing space was lost, so apply targeted the wrong path")
+        self.assertTrue((self.root / "trailing\n").exists())
 
 
 class TestStagingIsExclusive(ScratchFixture):
@@ -454,6 +500,7 @@ class TestStagingIsExclusive(ScratchFixture):
         (stale / "data").write_text("unapproved\n")
         (self.root / "idle").mkdir()
         backdate(self.root)
+        self.release("idle")
 
         manifest = self.manifest_from_dry_run()
         self.sweep("--apply", "--manifest", manifest)
@@ -474,6 +521,7 @@ class TestStagingIsExclusive(ScratchFixture):
         (cand / "work").write_text("original\n")
         (self.root / "idle").mkdir()
         backdate(self.root)
+        self.release("busy", "idle")
 
         if hold == "fd":
             code = ("import sys,time\n"
@@ -531,6 +579,7 @@ class TestStagingIsExclusive(ScratchFixture):
         (self.root / "one").mkdir()
         (self.root / "two").mkdir()
         backdate(self.root)
+        self.release("one", "two")
         manifest = self.manifest_from_dry_run()
         # Replace one approved object so it must be skipped.
         shutil.rmtree(self.root / "two")
@@ -578,6 +627,7 @@ class TestReportingDoesNotDisturbWhatItReports(ScratchFixture):
         git(repo, "remote", "add", "origin", str(remote))
         git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
         git(repo, "fetch", "-q", "origin")
+        self.release(name)
         return repo
 
     def test_a_dry_run_leaves_every_mtime_alone(self):
@@ -631,6 +681,7 @@ class TestGitMetadataIsNotUserActivity(ScratchFixture):
         git(repo, "remote", "add", "origin", str(remote))
         git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
         git(repo, "fetch", "-q", "origin")
+        self.release(name)
         return repo
 
     def _reclaimable(self) -> set:
@@ -690,6 +741,7 @@ class TestGitMetadataIsNotUserActivity(ScratchFixture):
         repo = self._pushed_repo("hooked")
         (self.root / "decoy").mkdir()   # so the dry run has something to offer
         backdate(self.root)
+        self.release("decoy")
         hook = repo / ".git" / "hooks" / "pre-commit"
         hook.write_text("#!/bin/sh\nexit 0\n")
 
@@ -706,6 +758,7 @@ class TestGitMetadataIsNotUserActivity(ScratchFixture):
         git(repo, "reset", "-q", "--hard", "HEAD~1")
         (self.root / "decoy").mkdir()   # so the dry run has something to offer
         backdate(self.root)
+        self.release("decoy")
         os.utime(repo / ".git" / "logs" / "HEAD", None)
 
         manifest = self.manifest_from_dry_run()
@@ -855,13 +908,14 @@ class TestTheBoundaryFailsClosed(ScratchFixture):
         entry.mkdir()
         (entry / "data").write_text("the only copy\n")
         backdate(self.root)
+        self.release("victim")
         return entry
 
     def _apply_under_shim(self, shim: str):
         entry = self._reclaimable_entry()
         manifest = self.manifest_from_dry_run()
         result = run(SWEEP, "--root", str(self.root), "--apply", "--manifest", manifest,
-                     env_extra={"PATH": shim + os.pathsep + os.environ["PATH"]})
+                     env_extra={**self.env, "PATH": shim + os.pathsep + os.environ["PATH"]})
         return entry, result
 
     # -- the two marker writes ------------------------------------------------
@@ -917,15 +971,10 @@ class TestTheBoundaryFailsClosed(ScratchFixture):
 class TestHoldAndDependencyGuards(ScratchFixture):
     """A hold refuses every apply; object lenders and worktree hosts are never reclaimable."""
 
-    def setUp(self) -> None:
-        super().setUp()
-        self.cfg = tempfile.mkdtemp(prefix="scratch-cfg-hold-")
-        (Path(self.cfg) / "config").write_text(f"AI_SCRATCH_OWNERS = {self.cfg}/no-owners\n")
-        self.env = {"AI_SCRATCH_CONFIG_DIR": self.cfg}
-
     def test_hold_refuses_apply_but_dry_run_still_reports(self):
         (self.root / "old-one").mkdir()
         backdate(self.root)
+        self.release("old-one")
         manifest = self.manifest_from_dry_run()
         setup = run(SETUP, "--hold", "recovery in progress", env_extra=self.env)
         self.assertEqual(setup.returncode, 0, setup.stderr)
@@ -950,6 +999,7 @@ class TestHoldAndDependencyGuards(ScratchFixture):
     def test_release_lifts_the_hold(self):
         (self.root / "old-one").mkdir()
         backdate(self.root)
+        self.release("old-one")
         run(SETUP, "--hold", "hold", env_extra=self.env)
         released = run(SETUP, "--release", env_extra=self.env)
         self.assertEqual(released.returncode, 0, released.stderr)
@@ -986,6 +1036,7 @@ class TestHoldAndDependencyGuards(ScratchFixture):
     def test_lender_outside_the_root_does_not_pin_root_entries(self):
         clone = self._pushed_clone("plain")
         backdate(self.root)
+        self.release("plain")
         out = self.sweep().stdout
         self.assertRegex(out, r"FREE\s+plain\b")
 
@@ -1009,12 +1060,6 @@ class TestHoldAndDependencyGuards(ScratchFixture):
 
 class TestDependencyCoverage(ScratchFixture):
     """Every way one repository can depend on another's objects or metadata keeps the dependency."""
-
-    def setUp(self) -> None:
-        super().setUp()
-        self.cfg = tempfile.mkdtemp(prefix="scratch-cfg-deps-")
-        (Path(self.cfg) / "config").write_text(f"AI_SCRATCH_OWNERS = {self.cfg}/no-owners\n")
-        self.env = {"AI_SCRATCH_CONFIG_DIR": self.cfg}
 
     def pushed(self, where: Path, name: str) -> Path:
         remote = self.tmp / f"{name}.git"
@@ -1077,8 +1122,9 @@ class TestDependencyCoverage(ScratchFixture):
         outside.mkdir(parents=True)
         self.shared(lender, outside / "borrower")
         backdate(self.root)
+        self.release("lender")
         self.assertRegex(self.sweep_env().stdout, r"FREE\s+lender\b")  # documented limit
-        (Path(self.cfg) / "config").write_text(f"AI_SCRATCH_LENDER_SCAN = {outside}\nAI_SCRATCH_OWNERS = {self.cfg}/no-owners\n")
+        self.write_config(f"AI_SCRATCH_LENDER_SCAN = {outside}\n")
         self.assertRegex(self.sweep_env("--verbose").stdout, r"KEEP\s+lender\s.*another repository depends on it")
 
     def test_worktree_outside_the_root_keeps_its_primary(self):
@@ -1102,6 +1148,7 @@ class TestDependencyCoverage(ScratchFixture):
         borrower = self.shared(lender, self.root / "borrower")
         (self.root / "plain").mkdir()
         backdate(self.root)
+        self.release("plain")
         alt = borrower / ".git" / "objects" / "info" / "alternates"
         self.addCleanup(subprocess.run, ["chmod", "u+r", str(alt)], capture_output=True)
         subprocess.run(["chmod", "000", str(alt)], check=True)
@@ -1121,9 +1168,10 @@ class TestDependencyCoverage(ScratchFixture):
         lender = self.pushed(self.root, "lender")
         (self.root / "plain").mkdir()
         backdate(self.root)
+        self.release("plain")
         manifest = re.search(r"--manifest (\S+)", self.sweep_env().stdout).group(1)
         self.shared(lender, self.tmp / "late-borrower")
-        (Path(self.cfg) / "config").write_text(f"AI_SCRATCH_LENDER_SCAN = {self.tmp / 'late-borrower'}\nAI_SCRATCH_OWNERS = {self.cfg}/no-owners\n")
+        self.write_config(f"AI_SCRATCH_LENDER_SCAN = {self.tmp / 'late-borrower'}\n")
         result = self.sweep_env("--apply", "--manifest", manifest)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("dependency evidence changed", result.stderr)
@@ -1133,6 +1181,7 @@ class TestDependencyCoverage(ScratchFixture):
     def test_manifest_without_a_dependency_digest_is_refused(self):
         (self.root / "plain").mkdir()
         backdate(self.root)
+        self.release("plain")
         manifest = re.search(r"--manifest (\S+)", self.sweep_env().stdout).group(1)
         body = [l for l in Path(manifest).read_text().splitlines() if not l.startswith("deps\t") and not l.startswith("sum\t")]
         tmp = Path(manifest + ".stripped")
@@ -1147,13 +1196,12 @@ class TestDependencyCoverage(ScratchFixture):
     def test_unreleased_owner_record_keeps_the_entry(self):
         repo = self.pushed(self.root, "owned")
         backdate(self.root)
-        owners = Path(self.cfg) / "owners" / "repo"
+        owners = self.owners / "repo"
         owners.mkdir(parents=True)
         real = subprocess.run(["bash", "-c", f'cd "{repo}" && pwd -P'], capture_output=True, text=True).stdout.strip()
-        (Path(self.cfg) / "config").write_text(f"AI_SCRATCH_OWNERS = {Path(self.cfg) / 'owners'}\n")
-        (owners / "owned.json").write_text(f'{{"worktree": "{real}", "complete": true, "released": false}}\n')
+        (owners / "owned.json").write_text(f'{{\n"worktree": "{real}",\n"complete": true,\n"released": false\n}}\n')
         self.assertRegex(self.sweep_env("--verbose").stdout, r"KEEP\s+owned\s.*owner record not released")
-        (owners / "owned.json").write_text(f'{{"worktree": "{real}", "complete": true, "released": true}}\n')
+        (owners / "owned.json").write_text(f'{{\n"worktree": "{real}",\n"complete": true,\n"released": true\n}}\n')
         self.assertRegex(self.sweep_env().stdout, r"FREE\s+owned\b")
 
     def test_dependents_inside_the_entry_do_not_pin_it(self):
@@ -1165,8 +1213,10 @@ class TestDependencyCoverage(ScratchFixture):
         git(entry, "-c", "user.email=t@example.invalid", "-c", "user.name=Test", "commit", "-qm", "inner")
         git(entry, "push", "-q", "origin", "HEAD:main")
         backdate(self.root)
+        self.release("with-internal-deps")
         out = self.sweep_env("--verbose").stdout
         self.assertNotRegex(out, r"KEEP\s+with-internal-deps\s.*another repository depends on it")
+        self.assertRegex(out, r"FREE\s+with-internal-deps\b")
 
     def test_sibling_clone_next_to_the_root_is_a_seen_borrower(self):
         lender = self.pushed(self.root, "lender")
@@ -1175,6 +1225,170 @@ class TestDependencyCoverage(ScratchFixture):
         backdate(self.root)
         out = self.sweep_env("--verbose").stdout
         self.assertRegex(out, r"KEEP\s+lender\s.*another repository depends on it")
+
+
+class TestOwnershipRecords(ScratchFixture):
+    """Only a well-formed record that says complete and released can let an entry go.
+
+    Missing, malformed, ambiguous and unreleased records all keep the entry.
+    Age, cleanliness and a pushed history say an entry is probably safe; only
+    its owner can say it is done with, and the absence of a record is not a
+    statement (2026-11-03: ai-usage-16 was reclaimed from under a session that
+    still depended on it; no record existed to say so).
+    """
+
+    def _pushed(self, name: str) -> Path:
+        remote = self.tmp / f"{name}.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+        git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
+        repo = self.root / name
+        new_repo(repo)
+        git(repo, "remote", "add", "origin", str(remote))
+        git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
+        git(repo, "fetch", "-q", "origin")
+        return repo
+
+    def _reason(self, name: str) -> str:
+        for ln in self.sweep("--verbose").stdout.splitlines():
+            if ln.startswith("  KEEP  ") and ln.split()[1] == name:
+                return ln.split("  ")[-1].strip()
+        return ""
+
+    def test_an_entry_without_a_record_is_kept_however_clean_idle_and_pushed(self):
+        self._pushed("unrecorded")
+        (self.root / "plain").mkdir()
+        backdate(self.root)
+        out = self.sweep("--verbose")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertRegex(out.stdout, r"KEEP\s+unrecorded\s.*no ownership record")
+        self.assertRegex(out.stdout, r"KEEP\s+plain\s.*no ownership record")
+        self.assertNotIn("FREE", out.stdout)
+        self.assertIn("reclaim       0", out.stdout)
+
+    def test_a_complete_released_record_is_the_only_way_to_be_offered(self):
+        self._pushed("done")
+        backdate(self.root)
+        self.release("done")
+        self.assertRegex(self.sweep().stdout, r"FREE\s+done\b")
+
+    def test_released_but_not_complete_is_kept(self):
+        self._pushed("half")
+        backdate(self.root)
+        self.release("half", complete=False, released=True)
+        self.assertIn("owner record not released", self._reason("half"))
+
+    def test_complete_but_not_released_is_kept(self):
+        self._pushed("mine")
+        backdate(self.root)
+        self.release("mine", complete=True, released=False)
+        self.assertIn("owner record not released", self._reason("mine"))
+
+    def test_the_record_must_name_this_exact_entry(self):
+        self._pushed("task")
+        self._pushed("task-2")
+        backdate(self.root)
+        self.release("task-2")
+        out = self.sweep("--verbose").stdout
+        self.assertRegex(out, r"FREE\s+task-2\b")
+        self.assertRegex(out, r"KEEP\s+task\s.*no ownership record")
+
+    def test_two_records_for_one_entry_are_ambiguous_and_keep_it(self):
+        self._pushed("disputed")
+        backdate(self.root)
+        self.release("disputed")
+        real = os.path.realpath(self.root / "disputed")
+        (self.owners / "second.json").write_text(
+            '{\n  "worktree": "%s",\n  "owner_session": "someone-else",\n  "complete": true,\n  "released": true\n}\n' % real)
+        self.assertIn("ambiguous ownership (2 records)", self._reason("disputed"))
+
+    def test_an_unreleased_record_inside_the_entry_keeps_the_entry(self):
+        entry = self._pushed("host")
+        backdate(self.root)
+        self.release("host")
+        inner = os.path.realpath(entry / "sub" / "inner-task")
+        (self.owners / "inner.json").write_text(
+            '{\n  "worktree": "%s",\n  "complete": false,\n  "released": false\n}\n' % inner)
+        self.assertIn("contains an owned worktree not released", self._reason("host"))
+
+    def test_a_malformed_record_keeps_everything_and_refuses_apply(self):
+        self._pushed("fine")
+        (self.root / "plain").mkdir()
+        backdate(self.root)
+        self.release("fine", "plain")
+        manifest = self.manifest_from_dry_run()
+        for text in ('{"worktree": "%s", "released": true}\n' % os.path.realpath(self.root / "fine"),  # one line
+                     '{\n  "worktree": "relative/path",\n  "released": true\n}\n',
+                     '{\n  "released": true\n}\n',
+                     '{\n  "worktree": {"nested": true},\n  "released": true\n}\n',
+                     '{\n  "worktree": "%s",\n  "released": true,\n' % os.path.realpath(self.root / "fine"),  # unterminated
+                     'not json at all\n',
+                     ''):
+            with self.subTest(text=text[:30]):
+                (self.owners / "broken.json").write_text(text)
+                dry = self.sweep("--verbose")
+                self.assertIn("ownership records unreadable or malformed", dry.stderr)
+                self.assertIn("broken.json", dry.stderr)
+                self.assertRegex(dry.stdout, r"KEEP\s+fine\s.*ownership records unreadable")
+                self.assertNotIn("FREE", dry.stdout)
+                result = self.sweep("--apply", "--manifest", manifest)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("ownership records unreadable", result.stderr)
+                self.assertTrue((self.root / "fine").exists())
+                self.assertTrue((self.root / "plain").exists())
+        (self.owners / "broken.json").unlink()
+        result = self.sweep("--apply", "--manifest", manifest)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.root / "plain").exists())
+
+    def test_an_unreadable_record_file_fails_closed(self):
+        (self.root / "plain").mkdir()
+        backdate(self.root)
+        self.release("plain")
+        secret = self.owners / "unreadable.json"
+        secret.write_text('{\n  "worktree": "/elsewhere",\n  "released": true\n}\n')
+        self.addCleanup(subprocess.run, ["chmod", "u+r", str(secret)], capture_output=True)
+        subprocess.run(["chmod", "000", str(secret)], check=True)
+        dry = self.sweep("--verbose")
+        self.assertIn("unreadable.json", dry.stderr)
+        self.assertNotIn("FREE", dry.stdout)
+
+    def test_a_record_withdrawn_between_dry_run_and_apply_aborts(self):
+        (self.root / "plain").mkdir()
+        (self.root / "other").mkdir()
+        backdate(self.root)
+        self.release("plain", "other")
+        manifest = self.manifest_from_dry_run()
+        self.release("plain", released=False)   # the owner takes it back
+        result = self.sweep("--apply", "--manifest", manifest)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("changed since the dry run", result.stderr)
+        self.assertTrue((self.root / "plain").exists())
+        self.assertTrue((self.root / "other").exists())
+
+    def test_no_owners_directory_at_all_keeps_everything(self):
+        (self.root / "plain").mkdir()
+        backdate(self.root)
+        shutil.rmtree(self.owners)
+        out = self.sweep("--verbose")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertRegex(out.stdout, r"KEEP\s+plain\s.*no ownership record")
+        self.assertNotIn("FREE", out.stdout)
+
+    def test_a_record_written_through_a_symlink_matches_the_physical_entry(self):
+        (self.root / "plain").mkdir()
+        link = self.tmp / "link-to-root"
+        link.symlink_to(self.root)
+        backdate(self.root)
+        (self.owners / "via-link.json").write_text(
+            '{\n  "worktree": "%s/",\n  "complete": true,\n  "released": true\n}\n' % (link / "plain"))
+        self.assertRegex(self.sweep().stdout, r"FREE\s+plain\b")
+
+    def test_setup_reports_the_ownership_directory(self):
+        self.release("plain")
+        out = run(SETUP, env_extra=self.env)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn(str(self.owners), out.stdout)
+        self.assertIn("1 record", out.stdout)
 
 
 if __name__ == "__main__":

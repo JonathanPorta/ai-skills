@@ -92,6 +92,7 @@ classify() {  # <abs-path> <base-name>
 
   # Fail closed when the dependency evidence could not be gathered.
   [ "$SCAN_FAILED" = 0 ] || { printf 'dependency scan failed (fail closed)'; return 0; }
+  [ "$OWNERS_FAILED" = 0 ] || { printf 'ownership records unreadable (fail closed)'; return 0; }
 
   # Another repository depends on this entry: it lends objects through
   # objects/info/alternates (directly or down a chain), it is the primary of a
@@ -118,20 +119,6 @@ classify() {  # <abs-path> <base-name>
       case "$(cat "$gd" 2>/dev/null)" in "$path"/*) ;; *) printf 'hosts a linked worktree outside itself'; return 0;; esac
     done
   fi
-  # An ownership record (AI_SCRATCH_OWNERS, default ~/devel/worktrees/.owners)
-  # that names this entry and is not released means retain. Entries without a
-  # record fall through to the ordinary rules; a record is the only way to say
-  # "mine, not done" without touching the entry.
-  if [ -n "$OWNERS_DIR" ] && [ -d "$OWNERS_DIR" ]; then
-    local rec="" f
-    while IFS= read -r -d '' f; do
-      if REAL="$real" awk 'BEGIN{r="\"" ENVIRON["REAL"] "\""} index($0, r) {f=1; exit} END{exit !f}' "$f" 2>/dev/null; then rec="$f"; break; fi
-    done < <(find "$OWNERS_DIR" -type f -name '*.json' -print0 2>/dev/null)
-    if [ -n "$rec" ] && ! grep -qE '"released":[[:space:]]*true' "$rec" 2>/dev/null; then
-      printf 'owner record not released (%s)' "${rec##*/}"; return 0
-    fi
-  fi
-
   [ -L "$path" ] && { printf 'symlink'; return 0; }
   [ -d "$path" ] || { printf 'not a directory'; return 0; }
 
@@ -196,13 +183,25 @@ classify() {  # <abs-path> <base-name>
     [ "$out" -gt 0 ] && { rm -f "$markers"; printf 'unpushed commits'; return 0; }
   done <"$markers"
   rm -f "$markers"
+
+  # The last gate: an ownership record (AI_SCRATCH_OWNERS, default
+  # ~/devel/worktrees/.owners) that names this entry and says complete AND
+  # released. Nothing else authorizes reclaiming an entry. No record, two
+  # records, a record that is not released, or an unreleased record for
+  # something inside the entry all keep it: idle, clean and pushed say the
+  # entry is probably safe to remove; only its owner can say it is done with
+  # (this is the rule that would have kept ai-usage-16 for ai-usage-17's
+  # session on 2026-11-03). Malformed records are handled above, globally.
+  r="$(scratch_owner_keep_reason "$real" "$OWNERS")"
+  [ -z "$r" ] || { printf '%s' "$r"; return 0; }
   printf ''; return 1
 }
 
 printf '\n=== disk before ===\n'
 df -h "$ROOT_REAL" | sed -n '1p;2p'
 printf '\nScratch root: %s  (%s)\n' "$ROOT_REAL" "$SCRATCH_ROOT_SRC"
-printf 'Idle threshold: %s days\n\n' "$OLDER_THAN"
+printf 'Idle threshold: %s days\n' "$OLDER_THAN"
+printf 'Ownership records: %s (an entry is reclaimable only with a complete + released record)\n\n' "$OWNERS_DIR"
 [ -z "$HOLD" ] || printf 'HOLD ACTIVE: %s\n  --apply will refuse until `scratch-setup.sh --release` lifts it.\n\n' "$HOLD"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/scratch-sweep.XXXXXX")" || exit 1
@@ -281,6 +280,19 @@ if [ -s "$DEPS_ERR" ]; then
 fi
 DEPS_DIGEST="$(scratch_sha256 "$LENDERS")"
 
+# Ownership index, built once per run from AI_SCRATCH_OWNERS (see
+# scratch_owner_record_parse in lib-scratch.sh for the record format). One
+# malformed or unreadable record marks the run unsafe exactly like a failed
+# dependency scan: the record cannot be attributed to an entry, so no entry
+# can be shown to be released.
+OWNERS="$WORK/owners"
+OWNERS_FAILED=0
+if ! scratch_owner_index "$OWNERS_DIR" "$OWNERS"; then
+  OWNERS_FAILED=1
+  printf 'WARNING: ownership records unreadable or malformed; every entry will be kept and --apply refused:\n' >&2
+  awk -F '\t' '$1 == "malformed" { print "  " $3 }' "$OWNERS" | head -5 >&2
+fi
+
 # NUL-delimited enumeration: no filename can split a record.
 while IFS= read -r -d '' path; do
   base="${path##*/}"
@@ -353,6 +365,7 @@ find "$WORK" -maxdepth 0 -newercm "$WORK" >/dev/null 2>&1 \
   || scratch_die "this system's find does not support -newercm, which the removal boundary requires"
 
 [ "$SCAN_FAILED" = 0 ] || scratch_die "dependency scan failed; refusing to apply (see warnings above)"
+[ "$OWNERS_FAILED" = 0 ] || scratch_die "ownership records unreadable or malformed; refusing to apply (see warnings above)"
 m_deps="$(sed -n 's/^deps\t//p' "$MANIFEST" | tail -1)"
 [ -n "$m_deps" ] || scratch_die "manifest carries no dependency digest; re-run the dry run with this version"
 [ "$m_deps" = "$DEPS_DIGEST" ] || scratch_die "dependency evidence changed since the dry run (a repository started or stopped lending objects, or a worktree was added); re-run the dry run and review again"

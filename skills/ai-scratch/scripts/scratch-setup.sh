@@ -107,6 +107,18 @@ for h in $protect; do shown_protect="$shown_protect${shown_protect:+, }$(scratch
 printf 'protected    : hidden entries%s\n' "${shown_protect:+, plus $shown_protect}"
 hold="$(scratch_config_get AI_SCRATCH_HOLD)"
 [ -z "$hold" ] || printf 'HOLD         : %s (every --apply refuses until --release)\n' "$hold"
+owners="$(scratch_config_get AI_SCRATCH_OWNERS)"; owners="${owners:-${HOME:-/nonexistent}/devel/worktrees/.owners}"
+owners_idx="$(mktemp "${TMPDIR:-/tmp}/scratch-owners.XXXXXX")"
+if scratch_owner_index "$owners" "$owners_idx"; then
+  n_rel="$(awk -F '\t' '$1 == "released"' "$owners_idx" | wc -l | tr -d ' ')"
+  n_all="$(wc -l <"$owners_idx" | tr -d ' ')"
+  printf 'ownership    : %s (%s record%s, %s released; entries without a complete + released record are never reclaimed)\n' \
+    "$owners" "$n_all" "$([ "$n_all" = 1 ] || printf s)" "$n_rel"
+else
+  printf 'ownership    : %s — MALFORMED record(s); the sweep keeps everything and refuses --apply until fixed:\n' "$owners"
+  awk -F '\t' '$1 == "malformed" { print "               " $3 }' "$owners_idx"
+fi
+rm -f "$owners_idx"
 printf 'config file  : %s%s\n' "$CONFIG" "$([ -f "$CONFIG" ] && printf '' || printf ' (not present)')"
 
 if canon="$(scratch_canonical "$SCRATCH_ROOT_RAW" 2>/dev/null)"; then

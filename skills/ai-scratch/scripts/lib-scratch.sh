@@ -272,3 +272,120 @@ scratch_resolve_root() {  # [explicit]
 scratch_need_value() {  # <count> <flag>
   [ "$1" -ge 2 ] || scratch_die "$2 requires a value" 2
 }
+
+# --- ownership records -------------------------------------------------------
+# One record per task worktree, as a FLAT JSON object: an opening "{" line, one
+# `"key": value` per line (string, true, false, null or number), a closing "}".
+# No nesting, no arrays, no duplicate keys, no multi-line strings. The grammar
+# is deliberately small so a bash-3.2 awk can validate it without a JSON
+# library; anything outside it is MALFORMED, and a malformed record is a reason
+# to keep, never to guess. The sweep consumes three keys:
+#   "worktree"  absolute path of the entry the record is about (required)
+#   "complete"  true when the task's work is done
+#   "released"  true when the owner has said the worktree may be removed
+# Everything else (owner_session, purpose, branch, pr, created, last_used, ...)
+# is for humans and the wt helper. The helper and the sweep share these
+# functions so they cannot disagree about what a record means.
+#
+# Prints "<status>\t<worktree>" where status is released (complete AND
+# released are both true), unreleased, or malformed (worktree is then empty).
+scratch_owner_record_parse() {  # <file>
+  LC_ALL=C awk '
+    function unescape(s,   out, i, c, n) {
+      out = ""; n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c == "\\") {
+          i++; c = substr(s, i, 1)
+          if (c == "\\" || c == "\"" || c == "/") out = out c
+          else { bad = 1; return "" }      # \n, \t, \uXXXX: not a path we accept
+        } else out = out c
+      }
+      return out
+    }
+    BEGIN { n = 0; bad = 0; open = 0; closed = 0 }
+    {
+      line = $0; sub(/^[ \t\r]+/, "", line); sub(/[ \t\r]+$/, "", line)
+      if (line == "") next
+      if (line ~ /[\001-\010\013-\037\177]/) { bad = 1; next }
+      if (!open) { if (line == "{") { open = 1; next } bad = 1; next }
+      if (closed) { bad = 1; next }
+      if (line == "}") { closed = 1; next }
+      if (match(line, /^"[A-Za-z0-9_.-]+"[ \t]*:[ \t]*/)) {
+        # the key is everything between the first quote and the next one
+        k = line; sub(/^"/, "", k); key = substr(k, 1, index(k, "\"") - 1)
+        rest = substr(line, RLENGTH + 1)
+        sub(/[ \t]*,$/, "", rest)
+        if (rest ~ /^"([^"\\]|\\.)*"$/) { val = substr(rest, 2, length(rest) - 2); typ = "string" }
+        else if (rest == "true" || rest == "false") { val = rest; typ = "bool" }
+        else if (rest == "null") { val = ""; typ = "null" }
+        else if (rest ~ /^-?[0-9]+(\.[0-9]+)?$/) { val = rest; typ = "number" }
+        else { bad = 1; next }
+        if (key in seen) { bad = 1; next }
+        seen[key] = 1; type[key] = typ; value[key] = val; n++
+      } else bad = 1
+    }
+    END {
+      if (bad || !open || !closed || n == 0) { print "malformed\t"; exit 0 }
+      if (!("worktree" in seen) || type["worktree"] != "string") { print "malformed\t"; exit 0 }
+      wt = unescape(value["worktree"])
+      if (bad || wt == "" || substr(wt, 1, 1) != "/") { print "malformed\t"; exit 0 }
+      if (wt ~ /\/\.\.(\/|$)/ || wt ~ /\/\.(\/|$)/) { print "malformed\t"; exit 0 }
+      sub(/\/+$/, "", wt); if (wt == "") wt = "/"
+      rel = ("released" in seen && type["released"] == "bool" && value["released"] == "true")
+      com = ("complete" in seen && type["complete"] == "bool" && value["complete"] == "true")
+      if (rel && com) print "released\t" wt; else print "unreleased\t" wt
+    }' "$1" 2>/dev/null || printf 'malformed\t\n'
+}
+
+# Index every record under <owners-dir> into <out> as
+# "<status>\t<canonical-worktree>\t<record-file>", one line per record, sorted.
+# A directory that does not exist yields an empty index (nothing is owned, so
+# nothing is released). Returns 1 when any record is malformed or unreadable,
+# after writing the malformed lines too, so the caller can fail closed and
+# name the file.
+scratch_owner_index() {  # <owners-dir> <out-file>
+  local dir="$1" out="$2" f line status wt real rc=0
+  : >"$out"
+  [ -n "$dir" ] && [ -d "$dir" ] || return 0
+  while IFS= read -r -d '' f; do
+    if [ ! -r "$f" ]; then printf 'malformed\t\t%s\n' "$f" >>"$out"; rc=1; continue; fi
+    line="$(scratch_owner_record_parse "$f")"
+    status="${line%%	*}"; wt="${line#*	}"
+    if [ "$status" = malformed ] || [ -z "$wt" ]; then printf 'malformed\t\t%s\n' "$f" >>"$out"; rc=1; continue; fi
+    # Compare physical paths: a record written through a symlink must still
+    # name the entry the sweep sees. A path that does not exist (yet, or any
+    # more) is kept verbatim; it matches nothing and releases nothing.
+    real="$(scratch_canonical "$wt" 2>/dev/null)" || real="$wt"
+    printf '%s\t%s\t%s\n' "$status" "$real" "$f" >>"$out"
+  done < <(find "$dir" -type f -name '*.json' -print0 2>/dev/null)
+  LC_ALL=C sort -o "$out" "$out"
+  return $rc
+}
+
+# Why <canonical-path> must be kept according to the index, or nothing when
+# exactly one well-formed record names it and says complete + released, and no
+# unreleased record names anything inside it. Missing, ambiguous and unreleased
+# all keep: a record is the only thing that can say "done with this", and its
+# absence is not a statement.
+scratch_owner_keep_reason() {  # <canonical-path> <index-file>
+  REAL="$1" LC_ALL=C awk -F '\t' '
+    BEGIN { r = ENVIRON["REAL"]; n = 0; inside = 0 }
+    $2 == r { n++; st = $1; file = $3 }
+    index($2, r "/") == 1 && $1 != "released" { inside++; ifile = $3 }
+    END {
+      if (n == 0) { print "no ownership record"; exit }
+      if (n > 1) { printf "ambiguous ownership (%d records)\n", n; exit }
+      sub(/.*\//, "", file)
+      if (st != "released") { printf "owner record not released (%s)\n", file; exit }
+      if (inside > 0) { sub(/.*\//, "", ifile); printf "contains an owned worktree not released (%s)\n", ifile; exit }
+    }' "$2"
+}
+
+# Write a record in the flat format above. Strings are escaped for the two
+# characters the parser accepts; a value with a control character is refused
+# so the file can never be written in a shape the parser calls malformed.
+scratch_json_string() {  # <text>
+  scratch_text_is_sane "$1" || return 1
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}

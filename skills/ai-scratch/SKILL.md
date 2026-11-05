@@ -153,11 +153,20 @@ reviewable, a bespoke exclusion is not.
   between review and apply blocks the apply. Do not create new clones that borrow from a disposable
   repository (`git clone --shared`, `--reference` without `--dissociate`): a borrower is only as durable as
   its lender, and a borrower of a blob-less partial clone cannot even pass `fsck`.
-- **Ownership records.** `AI_SCRATCH_OWNERS` (default `~/devel/worktrees/.owners`) holds JSON records that
-  name a worktree path; an entry whose record is not `"released": true` is kept. Entries with no record
-  rely on the ordinary rules (clean, pushed, idle, no dependency, not pinned, not held).
+- **Ownership records are the final gate.** `AI_SCRATCH_OWNERS` (default `~/devel/worktrees/.owners`)
+  holds one flat JSON record per task worktree (`"worktree"`: absolute path, `"complete"`, `"released"`,
+  plus owner, purpose, branch, PR and dates for humans; one `"key": value` per line, no nesting). An entry
+  is reclaimable **only** when exactly one well-formed record names its physical path and says
+  `"complete": true` **and** `"released": true`. **No record keeps the entry.** So does a record that is not
+  released, two records for one path (ambiguous), or an unreleased record for something inside the entry.
+  A malformed or unreadable record cannot be attributed to an entry, so it keeps every entry and makes
+  `--apply` refuse until it is fixed (`scratch-setup.sh` names the file). Age, a clean tree and a pushed
+  history say an entry is probably safe; only its owner can say it is done with, and the sweep never
+  manufactures a release from idleness or from the absence of a running process. The `wt` helper writes
+  and releases records in this format; `scratch-setup.sh` shows the directory and how many are released.
 - **Idle is a filter, not an authorization.** The idle window selects what is examined; only the keep
-  rules (clean, pushed, no lender, no host, not pinned, not held) decide what is reclaimable.
+  rules (clean, pushed, no lender, no host, not pinned, not held, complete + released record) decide
+  what is reclaimable.
 - **Source layout.** Human checkouts stay under `~/devel/portaj/<repo>`. Agent task worktrees go under
   `~/devel/worktrees/portaj/<repo>/<task>` with an ownership record at
   `~/devel/worktrees/.owners/<repo>/<task>.json` (owner, purpose, branch, PR, complete, released);
