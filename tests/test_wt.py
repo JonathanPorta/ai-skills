@@ -398,14 +398,22 @@ class TestListAndFinish(WtFixture):
         sha = git(path, "rev-parse", "HEAD")
         git(path, "reset", "-q", "--hard", "origin/main")
         git(self.primary, "update-ref", f"refs/keep/task1-{sha[:7]}", sha)
+        (self.primary / ".git" / "info").mkdir(exist_ok=True)
+        (self.primary / ".git" / "info" / "exclude").write_text(".tmp/\n")   # so the tree stays clean; only the location check can refuse
         inside = path / ".tmp"
         inside.mkdir()
-        (path / ".git" / "info").mkdir(parents=True, exist_ok=True) if (path / ".git").is_dir() else None
         bundle = inside / "k.bundle"
         git(self.primary, "bundle", "create", str(bundle), f"refs/keep/task1-{sha[:7]}")
+        self.assertEqual(git(path, "status", "--porcelain"), "")
         r = self.wt("finish", "demo", "task1", "--bundle", str(bundle), "--release")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("inside the worktree", r.stderr + r.stdout)
+        self.assertIn('"released": false', self.record())
+        link = self.tmp / "link.bundle"
+        link.symlink_to(bundle)
+        r = self.wt("finish", "demo", "task1", "--bundle", str(link), "--release")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("symlink", r.stderr + r.stdout)
         self.assertIn('"released": false', self.record())
 
     def test_a_full_bundle_with_the_default_branch_restores(self):

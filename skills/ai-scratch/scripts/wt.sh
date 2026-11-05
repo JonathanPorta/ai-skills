@@ -304,6 +304,7 @@ assess_preservation() {  # <wt> <primary> <bundle-path-or-empty> <recorded-bundl
   keeps="$(g -C "$primary" for-each-ref --format='%(refname) %(objectname)' refs/keep 2>/dev/null)"
   if [ -n "$bundle" ]; then
     if [ ! -f "$bundle" ]; then ASSESS_NOTE="$ASSESS_NOTE${ASSESS_NOTE:+; }bundle $bundle is missing"
+    elif [ -L "$bundle" ]; then ASSESS_NOTE="$ASSESS_NOTE${ASSESS_NOTE:+; }bundle $bundle is a symlink; name the file itself"
     else
       breal="$(cd -P -- "$(dirname -- "$bundle")" 2>/dev/null && pwd -P)/$(basename -- "$bundle")"
       local wtreal; wtreal="$(scratch_canonical "$wt" 2>/dev/null)" || wtreal="$wt"
@@ -369,16 +370,17 @@ run_gates() {  # <wt> <recorded-primary> <bundle> <rec-sha> <fetch> <for-removal
   gate "$([ "$complete" = true ] && echo 0 || echo 1)" "record says complete"
   [ "$for_removal" = 1 ] && gate "$([ "$rec_status" = released ] && echo 0 || echo 1)" "record says released"
   if primary_of "$wt" "$rec_primary"; then gate 0 "repository is $PRIMARY_REAL"; else gate 1 "repository: $PRIMARY_WHY"; PRIMARY_REAL="${PRIMARY_REAL:-$rec_primary}"; fi
-  local entry; entry="$(g -C "$PRIMARY_REAL" worktree list --porcelain 2>/dev/null | LC_ALL=C grep -A3 -xF "worktree $wt")"
+  local entry=""; [ -n "$PRIMARY_REAL" ] && entry="$(g -C "$PRIMARY_REAL" worktree list --porcelain 2>/dev/null | LC_ALL=C grep -A3 -xF "worktree $wt")"
   gate "$([ -n "$entry" ] && echo 0 || echo 1)" "registered in $PRIMARY_REAL"
   gate "$(printf '%s' "$entry" | grep -q '^locked' && echo 1 || echo 0)" "not locked"
-  local dirty; dirty="$(g -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+  local dirty; dirty="$(g -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')" || dirty="?"
+  g -C "$wt" status --porcelain >/dev/null 2>&1 || dirty="?"
   gate "$([ "$dirty" = 0 ] && echo 0 || echo 1)" "clean working tree and index ($dirty change(s))"
   gate "$([ ! -d "$wt/.git/worktrees" ] && echo 0 || echo 1)" "hosts no worktrees"
   gate "$([ -z "$(LC_ALL=C grep -lsxF -e "$wt/.git/objects" -e "$wt/.git/objects/" "$WT_PRIMARIES"/*/.git/objects/info/alternates "$WT_ROOT"/*/*/.git/objects/info/alternates 2>/dev/null)" ] && echo 0 || echo 1)" "lends no objects"
   gate "$([ -z "$(find "$wt" -mindepth 2 -name .git -not -path "$wt/.git/*" 2>/dev/null | head -1)" ] && echo 0 || echo 1)" "no nested repository"
   if assess_preservation "$wt" "$PRIMARY_REAL" "$bundle" "$rec_sha" "$fetch"; then
-    gate "$([ -z "$ASSESS_UNPRESERVED" ] && echo 0 || echo 1)" "history preserved (${ASSESS_BASIS:-nothing required}${ASSESS_UNPRESERVED:+; UNPRESERVED: $ASSESS_UNPRESERVED}${ASSESS_NOTE:+; $ASSESS_NOTE})"
+    gate "$([ -z "$ASSESS_UNPRESERVED" ] && echo 0 || echo 1)" "history preserved (${ASSESS_BASIS:-no basis}${ASSESS_UNPRESERVED:+; UNPRESERVED: $ASSESS_UNPRESERVED}${ASSESS_NOTE:+; $ASSESS_NOTE})"
   else
     gate 1 "history preserved (could not assess: $ASSESS_ERROR)"
   fi
@@ -467,7 +469,7 @@ cmd_finish() {
   blockers="$(printf '%s\n' "$gates" | LC_ALL=C awk '/^FAIL  / { sub(/^FAIL  /, ""); b = b (b ? "; " : "") $0 } END { printf "%s", b }')"
   if [ -n "$ASSESS_UNPRESERVED" ]; then
     n_unp="$(printf '%s\n' $ASSESS_UNPRESERVED | wc -l | tr -d ' ')"
-    blockers="$blockers${blockers:+; }$n_unp commit(s) with no preservation basis: $ASSESS_UNPRESERVED"
+    blockers="$blockers${blockers:+; }$n_unp commit(s) with no preservation basis (listed above as UNPRESERVED)"
   fi
   local t; t="$(now)"
   {
@@ -491,9 +493,12 @@ cmd_finish() {
       printf 'preserved_bundle_sha256\tstring\t%s\n' "$ASSESS_BUNDLE_SHA"
       printf 'preserved_bundle_commits\tstring\t%s\n' "$ASSESS_BUNDLE_COMMITS"
       printf 'preserved_repository\tstring\t%s\n' "$(g -C "$primary" remote get-url origin 2>/dev/null || printf '%s' "$primary")"
-    else
+    elif [ -n "$bundle_opt" ] || [ -z "$bundle" ]; then
+      # A bundle given now that covers nothing, or no bundle at all: record none.
       printf 'preserved_bundle\tstring\t\n'; printf 'preserved_bundle_sha256\tstring\t\n'; printf 'preserved_bundle_commits\tstring\t\n'; printf 'preserved_repository\tstring\t\n'
     fi
+    # (a recorded bundle that was merely unusable this run keeps its fields:
+    # the evidence pointer is not lost, and the next check re-evaluates it)
   } >"$WT_TMP/ov"
   # Every finish states released explicitly: a stale "released": true from an
   # earlier run must never survive a later finish that found unpreserved work.
@@ -530,7 +535,7 @@ cmd_finish() {
   envs="${envs}WT_ROOT=$(shq "$WT_ROOT") WT_PRIMARIES=$(shq "$WT_PRIMARIES")"
   printf '\n# Cleanup plan for %s (NOTHING below was executed; wt never deletes)\n' "$wt"
   printf '# Re-run the validator seconds before removal; stop if it is NOT OK:\n'
-  printf '%s %s check %s %s --for-removal   # record complete + released, registered, not locked, clean, hosts/lends nothing, no nested repo, every required commit preserved (fetches origin/%s and restores the recorded bundle offline)\n' "$envs" "$(shq "$here/wt.sh")" "$(shq "$repo")" "$(shq "$task")" "$ASSESS_DEFAULT"
+  printf '%s %s check %s %s --for-removal   # record complete + released, repository as git reports it, registered, not locked, clean, hosts/lends nothing, no nested repo, every required commit preserved (fetches the remote default branch%s and restores the recorded bundle offline; add --no-fetch only when origin is unreachable, then only keep refs + bundle count)\n' "$envs" "$(shq "$here/wt.sh")" "$(shq "$repo")" "$(shq "$task")" "${ASSESS_DEFAULT:+ origin/$ASSESS_DEFAULT}"
   printf '# then, and only then, the non-forced removal (never --force, never prune, never gc):\n'
   printf 'git -C %s worktree remove %s\n' "$(shq "$primary")" "$(shq "$wt")"
   printf '# the branch %s and any refs/keep/* stay in the primary; the record stays as history.\n' "$(shq "$branch")"
