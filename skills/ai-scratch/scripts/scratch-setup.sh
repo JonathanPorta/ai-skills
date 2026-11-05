@@ -6,6 +6,8 @@
 #   scratch-setup.sh --set ~/work/scratch # persist it (creates the directory)
 #   scratch-setup.sh --idle-days 14       # default idle window for the sweep
 #   scratch-setup.sh --protect NAME       # pin an extra entry against cleanup
+#   scratch-setup.sh --hold "REASON"      # refuse every --apply until --release
+#   scratch-setup.sh --release            # lift the hold
 #
 # Resolution order, highest first: --root, $AI_SCRATCH_ROOT,
 # ~/.ai-scratch/config, then /tmp/ai-scratch.
@@ -16,7 +18,7 @@ SELF_DIR="$(CDPATH= cd -P -- "$(dirname -- "$0")" && pwd -P)"
 # shellcheck source=lib-scratch.sh
 . "$SELF_DIR/lib-scratch.sh"
 
-set_root=""; set_idle=""; set_protect=""; explicit_root=""
+set_root=""; set_idle=""; set_protect=""; explicit_root=""; set_hold=""; release=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --set)          scratch_need_value $# "--set";        set_root="$2"; shift 2;;
@@ -27,7 +29,10 @@ while [ $# -gt 0 ]; do
     --idle-days=*) set_idle="${1#*=}"; [ -n "$set_idle" ] || scratch_die "--idle-days requires a value" 2; shift;;
     --protect)      scratch_need_value $# "--protect";    set_protect="$2"; shift 2;;
     --protect=*) set_protect="${1#*=}"; [ -n "$set_protect" ] || scratch_die "--protect requires a value" 2; shift;;
-    -h|--help)      sed -n '3,13p' "$0"; exit 0;;
+    --hold)         scratch_need_value $# "--hold";       set_hold="$2"; shift 2;;
+    --hold=*) set_hold="${1#*=}"; [ -n "$set_hold" ] || scratch_die "--hold requires a reason" 2; shift;;
+    --release)      release=1; shift;;
+    -h|--help)      sed -n '3,15p' "$0"; exit 0;;
     *) scratch_die "unknown option: $1" 2;;
   esac
 done
@@ -78,6 +83,17 @@ if [ -n "$set_protect" ]; then
   fi
 fi
 
+if [ -n "$set_hold" ]; then
+  scratch_text_is_sane "$set_hold" || scratch_die "that reason contains control characters"
+  case "$set_hold" in *=*) scratch_die "the hold reason may not contain '='";; esac
+  config_put AI_SCRATCH_HOLD "$set_hold"
+fi
+if [ "$release" -eq 1 ]; then
+  mkdir -p "$CONFIG_DIR" && touch "$CONFIG"
+  tmp="$CONFIG.tmp.$$"; grep -v "^[[:space:]]*AI_SCRATCH_HOLD[[:space:]]*=" "$CONFIG" >"$tmp"; mv "$tmp" "$CONFIG"
+  printf 'released the hold\n'
+fi
+
 # --- report -----------------------------------------------------------------
 scratch_resolve_root "$explicit_root"
 idle="$(scratch_config_get AI_SCRATCH_IDLE_DAYS)"
@@ -89,6 +105,8 @@ printf 'idle window  : %s days (%s)\n' "${idle:-7}" "$([ -n "$idle" ] && echo co
 shown_protect=""
 for h in $protect; do shown_protect="$shown_protect${shown_protect:+, }$(scratch_display_name "$(scratch_hex_decode "$h")")"; done
 printf 'protected    : hidden entries%s\n' "${shown_protect:+, plus $shown_protect}"
+hold="$(scratch_config_get AI_SCRATCH_HOLD)"
+[ -z "$hold" ] || printf 'HOLD         : %s (every --apply refuses until --release)\n' "$hold"
 printf 'config file  : %s%s\n' "$CONFIG" "$([ -f "$CONFIG" ] && printf '' || printf ' (not present)')"
 
 if canon="$(scratch_canonical "$SCRATCH_ROOT_RAW" 2>/dev/null)"; then

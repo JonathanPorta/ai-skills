@@ -130,6 +130,40 @@ If the operator wants something kept that the report marked `FREE`, raise the
 idle threshold rather than hand-editing the list — a bigger `--older-than` is
 reviewable, a bespoke exclusion is not.
 
+## Hold, lenders, and the source layout
+
+- **Hold.** `scripts/scratch-setup.sh --hold "reason"` records `AI_SCRATCH_HOLD` in the config. While it
+  stands, every dry run prints `HOLD ACTIVE` and every `--apply` refuses (exit 3) before it reads a
+  manifest, in every session that shares the config. Name pins (`--protect`) only cover entries that
+  existed when they were written; a hold covers entries created afterwards. `--release` lifts it. Use a
+  hold whenever a recovery, migration or audit is in progress.
+- **Dependencies are never reclaimable.** Before classifying, the sweep builds a dependency index:
+  every `objects/info/alternates` target (relative paths resolved against the borrower's objects
+  directory, symlinks resolved, chains followed because every repository's own alternates file is read),
+  the primary of every linked worktree it finds (the `gitdir:` pointer), and anything named by
+  `GIT_ALTERNATE_OBJECT_DIRECTORIES`. An entry that appears in the index is kept however clean, pushed and
+  idle it is, and so is an entry whose `.git/worktrees` points outside itself. **Coverage:** the root at
+  full depth, the root's parent to depth 5 (enough to see a sibling clone's alternates file), and every
+  directory in `AI_SCRATCH_LENDER_SCAN`; a dependency declared anywhere else is not seen, so name that place
+  in `AI_SCRATCH_LENDER_SCAN`. A dependent that lives inside the entry itself (a submodule, a worktree hosted
+  within the entry) does not pin it. If the scan fails, or any directory or alternates file in those
+  locations cannot be read, every entry is kept and `--apply` refuses: with a shared parent such as
+  `/private/tmp`, one unreadable directory is enough, by design. The dry-run manifest
+  records a digest of the index; `--apply` rebuilds it and refuses when it differs, so a borrower created
+  between review and apply blocks the apply. Do not create new clones that borrow from a disposable
+  repository (`git clone --shared`, `--reference` without `--dissociate`): a borrower is only as durable as
+  its lender, and a borrower of a blob-less partial clone cannot even pass `fsck`.
+- **Ownership records.** `AI_SCRATCH_OWNERS` (default `~/devel/worktrees/.owners`) holds JSON records that
+  name a worktree path; an entry whose record is not `"released": true` is kept. Entries with no record
+  rely on the ordinary rules (clean, pushed, idle, no dependency, not pinned, not held).
+- **Idle is a filter, not an authorization.** The idle window selects what is examined; only the keep
+  rules (clean, pushed, no lender, no host, not pinned, not held) decide what is reclaimable.
+- **Source layout.** Human checkouts stay under `~/devel/portaj/<repo>`. Agent task worktrees go under
+  `~/devel/worktrees/portaj/<repo>/<task>` with an ownership record at
+  `~/devel/worktrees/.owners/<repo>/<task>.json` (owner, purpose, branch, PR, complete, released);
+  cleanup of such a worktree requires the record to say complete and released. No unique work may live
+  only under `/private/tmp`: give it a ref in the common dir before the session ends.
+
 ## Safety properties worth knowing
 
 Both scripts share one definition of a safe root, so setup cannot persist a root

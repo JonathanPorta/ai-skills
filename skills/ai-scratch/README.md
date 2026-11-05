@@ -23,6 +23,9 @@ boring.
 
 ## Configuration
 
+`scratch-setup.sh --hold "reason"` / `--release` set and clear `AI_SCRATCH_HOLD`, which makes every `--apply` refuse. `AI_SCRATCH_LENDER_SCAN` lists extra directories to search for `objects/info/alternates` borrowers.
+
+
 Resolution order, highest first:
 
 1. `--root`
