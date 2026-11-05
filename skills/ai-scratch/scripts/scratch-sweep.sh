@@ -66,7 +66,7 @@ PROTECT_EXTRA="$(scratch_config_get AI_SCRATCH_PROTECT)"
 # explicit `scratch-setup.sh --release`. Name-by-name pins (AI_SCRATCH_PROTECT)
 # cannot cover an entry that did not exist when the pin was written; a hold can.
 HOLD="$(scratch_config_get AI_SCRATCH_HOLD)"
-OWNERS_DIR="$(scratch_config_get AI_SCRATCH_OWNERS)"; OWNERS_DIR="${OWNERS_DIR:-${HOME:-/nonexistent}/devel/worktrees/.owners}"
+OWNERS_DIR="$(scratch_owners_dir)"
 # Fail fast: an apply under a hold must not even enumerate the root, let alone
 # run git in every entry, before refusing.
 if [ "$APPLY" = 1 ] && [ -n "$HOLD" ]; then
@@ -290,7 +290,7 @@ OWNERS_FAILED=0
 if ! scratch_owner_index "$OWNERS_DIR" "$OWNERS"; then
   OWNERS_FAILED=1
   printf 'WARNING: ownership records unreadable or malformed; every entry will be kept and --apply refused:\n' >&2
-  awk -F '\t' '$1 == "malformed" { print "  " $3 }' "$OWNERS" | head -5 >&2
+  scratch_owner_index_malformed "$OWNERS" | head -5 | sed 's/^/  /' >&2
 fi
 
 # NUL-delimited enumeration: no filename can split a record.

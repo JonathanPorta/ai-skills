@@ -107,8 +107,8 @@ for h in $protect; do shown_protect="$shown_protect${shown_protect:+, }$(scratch
 printf 'protected    : hidden entries%s\n' "${shown_protect:+, plus $shown_protect}"
 hold="$(scratch_config_get AI_SCRATCH_HOLD)"
 [ -z "$hold" ] || printf 'HOLD         : %s (every --apply refuses until --release)\n' "$hold"
-owners="$(scratch_config_get AI_SCRATCH_OWNERS)"; owners="${owners:-${HOME:-/nonexistent}/devel/worktrees/.owners}"
-owners_idx="$(mktemp "${TMPDIR:-/tmp}/scratch-owners.XXXXXX")"
+owners="$(scratch_owners_dir)"
+owners_idx="$(mktemp "${TMPDIR:-/tmp}/scratch-owners.XXXXXX")" || scratch_die "cannot create a temporary file"
 if scratch_owner_index "$owners" "$owners_idx"; then
   n_rel="$(awk -F '\t' '$1 == "released"' "$owners_idx" | wc -l | tr -d ' ')"
   n_all="$(wc -l <"$owners_idx" | tr -d ' ')"
@@ -116,7 +116,8 @@ if scratch_owner_index "$owners" "$owners_idx"; then
     "$owners" "$n_all" "$([ "$n_all" = 1 ] || printf s)" "$n_rel"
 else
   printf 'ownership    : %s — MALFORMED record(s); the sweep keeps everything and refuses --apply until fixed:\n' "$owners"
-  awk -F '\t' '$1 == "malformed" { print "               " $3 }' "$owners_idx"
+  scratch_owner_index_malformed "$owners_idx" | sed 's/^/               /'
+  [ -d "$owners" ] || printf '               (%s does not exist)\n' "$owners"
 fi
 rm -f "$owners_idx"
 printf 'config file  : %s%s\n' "$CONFIG" "$([ -f "$CONFIG" ] && printf '' || printf ' (not present)')"

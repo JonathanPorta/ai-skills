@@ -1383,6 +1383,137 @@ class TestOwnershipRecords(ScratchFixture):
             '{\n  "worktree": "%s/",\n  "complete": true,\n  "released": true\n}\n' % (link / "plain"))
         self.assertRegex(self.sweep().stdout, r"FREE\s+plain\b")
 
+    def test_a_tab_in_a_record_path_cannot_release_a_neighbouring_entry(self):
+        # The index is tab-delimited; a path carrying a tab must not split into
+        # "/root/tab" + "name" and release the entry called "tab".
+        (self.root / "tab").mkdir()
+        (self.root / "tab\tname").mkdir()
+        backdate(self.root)
+        real = os.path.realpath(self.root / "tab\tname")
+        (self.owners / "tabbed.json").write_text(
+            '{\n  "worktree": "%s",\n  "complete": true,\n  "released": true\n}\n' % real)
+        dry = self.sweep("--verbose")
+        self.assertNotIn("FREE", dry.stdout)
+        self.assertIn("malformed", dry.stderr)
+        self.assertNotEqual(self.sweep("--apply", "--manifest", "/nonexistent").returncode, 0)
+        self.assertTrue((self.root / "tab").exists())
+
+    def test_a_record_through_a_symlink_to_a_newline_named_entry_releases_nothing(self):
+        # The typed path is clean; the physical path has a newline. The index
+        # must not split on it and release the entry called "a".
+        (self.root / "a").mkdir()
+        (self.root / "a\nb").mkdir()
+        link = self.tmp / "lnk"
+        link.symlink_to(self.root / "a\nb")
+        backdate(self.root)
+        (self.owners / "lnk.json").write_text(
+            '{\n  "worktree": "%s",\n  "complete": true,\n  "released": true\n}\n' % link)
+        dry = self.sweep("--verbose")
+        self.assertNotRegex(dry.stdout, r"FREE\s+a\b")
+        self.assertNotIn("FREE", dry.stdout)
+        self.assertIn("malformed", dry.stderr)
+
+    def test_an_unreadable_subdirectory_of_records_fails_closed(self):
+        # A hidden unreleased record could make the entry ambiguous; an index
+        # that could not enumerate everything proves nothing.
+        (self.root / "plain").mkdir()
+        backdate(self.root)
+        self.release("plain")
+        sub = self.owners / "sub"
+        sub.mkdir()
+        (sub / "other.json").write_text('{\n  "worktree": "/elsewhere",\n  "released": true\n}\n')
+        self.addCleanup(subprocess.run, ["chmod", "u+rwx", str(sub)], capture_output=True)
+        subprocess.run(["chmod", "000", str(sub)], check=True)
+        dry = self.sweep("--verbose")
+        self.assertNotIn("FREE", dry.stdout)
+        self.assertIn("malformed", dry.stderr)
+        self.assertNotEqual(self.sweep("--apply", "--manifest", "/nonexistent").returncode, 0)
+
+    def test_an_unreadable_owners_directory_fails_closed(self):
+        (self.root / "plain").mkdir()
+        backdate(self.root)
+        self.release("plain")
+        self.addCleanup(subprocess.run, ["chmod", "u+rwx", str(self.owners)], capture_output=True)
+        subprocess.run(["chmod", "000", str(self.owners)], check=True)
+        dry = self.sweep("--verbose")
+        self.assertNotIn("FREE", dry.stdout)
+        self.assertRegex(dry.stdout, r"KEEP\s+plain\s.*ownership records unreadable")
+        setup = run(SETUP, env_extra=self.env)
+        self.assertIn("MALFORMED", setup.stdout)
+
+    def test_symlinked_and_directory_records_are_malformed(self):
+        (self.root / "plain").mkdir()
+        backdate(self.root)
+        self.release("plain")
+        target = self.tmp / "real-record.json"
+        target.write_text('{\n  "worktree": "/elsewhere",\n  "released": false\n}\n')
+        for make in ("symlink", "directory"):
+            with self.subTest(kind=make):
+                odd = self.owners / "odd.json"
+                if make == "symlink":
+                    odd.symlink_to(target)
+                else:
+                    odd.mkdir()
+                try:
+                    dry = self.sweep("--verbose")
+                    self.assertNotIn("FREE", dry.stdout)
+                    self.assertIn("odd.json", dry.stderr)
+                finally:
+                    odd.unlink() if odd.is_symlink() else odd.rmdir()
+        self.assertRegex(self.sweep().stdout, r"FREE\s+plain\b")
+
+    def test_record_value_shapes(self):
+        self._pushed("shape")
+        backdate(self.root)
+        real = os.path.realpath(self.root / "shape")
+        cases = {
+            # released as a STRING is not a boolean true
+            '{\n  "worktree": "%s",\n  "complete": true,\n  "released": "true"\n}\n' % real: "owner record not released",
+            # duplicate keys are ambiguous within one file
+            '{\n  "worktree": "%s",\n  "released": true,\n  "released": false,\n  "complete": true\n}\n' % real: "ownership records unreadable",
+            # a control byte inside a value
+            '{\n  "worktree": "%s",\n  "note": "x\x01y",\n  "complete": true,\n  "released": true\n}\n' % real: "ownership records unreadable",
+            # CRLF line endings parse (the writer never emits them, a hand-written file may)
+            '{\r\n  "worktree": "%s",\r\n  "complete": true,\r\n  "released": true\r\n}\r\n' % real: "FREE",
+            # a \u escape is refused rather than guessed at
+            '{\n  "worktree": "%s\\u0041",\n  "complete": true,\n  "released": true\n}\n' % real: "ownership records unreadable",
+        }
+        for text, expect in cases.items():
+            with self.subTest(text=text[:40]):
+                self.release("shape", record=text)
+                out = self.sweep("--verbose").stdout
+                if expect == "FREE":
+                    self.assertRegex(out, r"FREE\s+shape\b")
+                else:
+                    self.assertRegex(out, r"KEEP\s+shape\s.*" + expect)
+
+    def test_an_ancestor_record_releases_no_child_and_a_released_inner_record_does_not_pin(self):
+        entry = self._pushed("outer")
+        backdate(self.root)
+        # A record for the root itself (or its parent) says nothing about entries inside it.
+        (self.owners / "root.json").write_text(
+            '{\n  "worktree": "%s",\n  "complete": true,\n  "released": true\n}\n' % os.path.realpath(self.root))
+        self.assertRegex(self.sweep("--verbose").stdout, r"KEEP\s+outer\s.*no ownership record")
+        (self.owners / "root.json").unlink()
+        # A released record for something inside the entry does not keep the entry.
+        self.release("outer")
+        (self.owners / "inner.json").write_text(
+            '{\n  "worktree": "%s",\n  "complete": true,\n  "released": true\n}\n' % os.path.realpath(entry / "sub"))
+        self.assertRegex(self.sweep().stdout, r"FREE\s+outer\b")
+
+    def test_tilde_in_the_configured_owners_directory_is_expanded(self):
+        (self.root / "plain").mkdir()
+        backdate(self.root)
+        home = self.tmp / "home"
+        owners = home / "records"
+        owners.mkdir(parents=True)
+        real = os.path.realpath(self.root / "plain")
+        (owners / "plain.json").write_text('{\n  "worktree": "%s",\n  "complete": true,\n  "released": true\n}\n' % real)
+        (Path(self.cfg) / "config").write_text("AI_SCRATCH_OWNERS = ~/records\n")
+        out = run(SWEEP, "--root", str(self.root), env_extra={**self.env, "HOME": str(home)}).stdout
+        self.assertRegex(out, r"FREE\s+plain\b")
+        self.assertIn(str(owners), run(SETUP, env_extra={**self.env, "HOME": str(home)}).stdout)
+
     def test_setup_reports_the_ownership_directory(self):
         self.release("plain")
         out = run(SETUP, env_extra=self.env)
