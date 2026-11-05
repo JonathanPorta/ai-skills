@@ -59,6 +59,14 @@ ROOT_ID="$(scratch_devino "$ROOT_REAL")" || scratch_die "cannot identify $ROOT_R
 # Extra names the operator wants pinned, beyond the dot-entry convention.
 PROTECT_EXTRA="$(scratch_config_get AI_SCRATCH_PROTECT)"
 
+# An operator hold. While it is set, a dry run still reports (so the hold is
+# visible and candidates can be reviewed) but --apply refuses outright, before
+# any manifest is read. It is a config key, not an environment variable, so it
+# binds every session that shares the config, and it is lifted only by an
+# explicit `scratch-setup.sh --release`. Name-by-name pins (AI_SCRATCH_PROTECT)
+# cannot cover an entry that did not exist when the pin was written; a hold can.
+HOLD="$(scratch_config_get AI_SCRATCH_HOLD)"
+
 human() { awk -v k="$1" 'BEGIN{split("KB MB GB TB",u," ");i=1;while(k>=1024&&i<4){k/=1024;i++}printf "%.1f%s",k,u[i]}'; }
 
 # --- classification ---------------------------------------------------------
@@ -74,6 +82,30 @@ classify() {  # <abs-path> <base-name>
 
   if scratch_protect_matches "$base" "$PROTECT_EXTRA"; then
     printf 'pinned by AI_SCRATCH_PROTECT'; return 0
+  fi
+
+  # Object dependencies are invisible to a per-entry view. A repository that
+  # LENDS objects through another repository's objects/info/alternates is the
+  # only copy of those objects for that borrower; deleting the lender breaks the
+  # borrower even when the lender itself is clean, pushed and idle (this is how
+  # ai-usage-16 was removed from under ai-usage-17 on 2026-11-03). The lender
+  # index is built once per run from every alternates file under the root and
+  # its neighbours (see below); a candidate is kept when any borrower's
+  # alternates path resolves inside it.
+  if [ -s "$LENDERS" ]; then
+    local real; real="$(scratch_canonical "$path" 2>/dev/null)" || real="$path"
+    if grep -qF -- "$real/" "$LENDERS" || grep -qxF -- "$real" "$LENDERS"; then
+      printf 'lends objects to another repository (alternates)'; return 0
+    fi
+  fi
+  # A primary that hosts a linked worktree OUTSIDE the candidate is likewise a
+  # dependency: the worktree's .git file points into this entry's .git/worktrees.
+  if [ -d "$path/.git/worktrees" ]; then
+    local gd
+    for gd in "$path"/.git/worktrees/*/gitdir; do
+      [ -f "$gd" ] || continue
+      case "$(cat "$gd" 2>/dev/null)" in "$path"/*) ;; *) printf 'hosts a linked worktree outside itself'; return 0;; esac
+    done
   fi
 
   [ -L "$path" ] && { printf 'symlink'; return 0; }
@@ -147,12 +179,37 @@ printf '\n=== disk before ===\n'
 df -h "$ROOT_REAL" | sed -n '1p;2p'
 printf '\nScratch root: %s  (%s)\n' "$ROOT_REAL" "$SCRATCH_ROOT_SRC"
 printf 'Idle threshold: %s days\n\n' "$OLDER_THAN"
+[ -z "$HOLD" ] || printf 'HOLD ACTIVE: %s\n  --apply will refuse until `scratch-setup.sh --release` lifts it.\n\n' "$HOLD"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/scratch-sweep.XXXXXX")" || exit 1
 SCRATCH_WORK="$WORK"
 trap 'rm -rf "$WORK"' EXIT
 : >"$WORK/candidates"   # hex-name<TAB>devino<TAB>kb
 : >"$WORK/keeps"        # reason<TAB>kb
+
+# Lender index: every alternates target that any repository near the root
+# declares, as canonical paths. Relative entries are resolved against the
+# borrower's objects directory, as git does. Searched: the root and its parent
+# (where the operator's primaries normally live), plus any directories named in
+# AI_SCRATCH_LENDER_SCAN (space-separated), with build trees pruned. The scan is
+# bounded on purpose: it runs on every sweep, so it must stay cheap.
+LENDERS="$WORK/lenders"; : >"$LENDERS"
+scan_parent="$(dirname -- "$ROOT_REAL")"
+# shellcheck disable=SC2046
+find "$ROOT_REAL" "$scan_parent" $(scratch_config_get AI_SCRATCH_LENDER_SCAN) -maxdepth 6 \
+     \( -name node_modules -o -name .build -o -name target -o -name dist \) -prune -o \
+     -type f -path '*/objects/info/alternates' -print0 2>/dev/null \
+  | while IFS= read -r -d '' alt; do
+      objdir="$(dirname -- "$(dirname -- "$(dirname -- "$alt")")")"
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        case "$line" in /*) target="$line";; *) target="$objdir/$line";; esac
+        # The lender ROOT is the repository (or .git) directory holding objects/.
+        target="${target%/}"; target="${target%/objects}"; target="${target%/.git}"
+        resolved="$(scratch_canonical "$target" 2>/dev/null)" || resolved="$target"
+        printf '%s\n' "$resolved"
+      done <"$alt"
+    done | sort -u >"$LENDERS"
 
 # NUL-delimited enumeration: no filename can split a record.
 while IFS= read -r -d '' path; do
@@ -205,6 +262,7 @@ if [ "$APPLY" != 1 ]; then
 fi
 
 # --- apply ------------------------------------------------------------------
+[ -z "$HOLD" ] || scratch_die "apply is on hold: $HOLD — lift it with scratch-setup.sh --release" 3
 [ -n "$MANIFEST" ] || scratch_die "--apply requires --manifest <file> from a dry run" 2
 [ -f "$MANIFEST" ] || scratch_die "manifest not found: $MANIFEST"
 

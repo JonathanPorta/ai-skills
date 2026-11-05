@@ -903,3 +903,92 @@ class TestTheBoundaryFailsClosed(ScratchFixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHoldAndDependencyGuards(ScratchFixture):
+    """A hold refuses every apply; object lenders and worktree hosts are never reclaimable."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.cfg = tempfile.mkdtemp(prefix="scratch-cfg-hold-")
+        self.env = {"AI_SCRATCH_CONFIG_DIR": self.cfg}
+
+    def test_hold_refuses_apply_but_dry_run_still_reports(self):
+        (self.root / "old-one").mkdir()
+        backdate(self.root)
+        manifest = self.manifest_from_dry_run()
+        setup = run(SETUP, "--hold", "recovery in progress", env_extra=self.env)
+        self.assertEqual(setup.returncode, 0, setup.stderr)
+        self.assertIn("HOLD", setup.stdout)
+
+        dry = run(SWEEP, "--root", str(self.root), env_extra=self.env)
+        self.assertEqual(dry.returncode, 0, dry.stderr)
+        self.assertIn("HOLD ACTIVE: recovery in progress", dry.stdout)
+        self.assertIn("FREE", dry.stdout)
+
+        result = run(SWEEP, "--root", str(self.root), "--apply", "--manifest", manifest, env_extra=self.env)
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("on hold", result.stderr)
+        self.assertTrue((self.root / "old-one").exists())
+
+    def test_hold_refuses_apply_even_with_a_bad_manifest_path(self):
+        run(SETUP, "--hold", "hold", env_extra=self.env)
+        result = run(SWEEP, "--root", str(self.root), "--apply", "--manifest", "/nonexistent", env_extra=self.env)
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("on hold", result.stderr)
+
+    def test_release_lifts_the_hold(self):
+        (self.root / "old-one").mkdir()
+        backdate(self.root)
+        run(SETUP, "--hold", "hold", env_extra=self.env)
+        released = run(SETUP, "--release", env_extra=self.env)
+        self.assertEqual(released.returncode, 0, released.stderr)
+        self.assertNotIn("HOLD", released.stdout)
+        manifest = re.search(r"--manifest (\S+)", run(SWEEP, "--root", str(self.root), env_extra=self.env).stdout).group(1)
+        result = run(SWEEP, "--root", str(self.root), "--apply", "--manifest", manifest, env_extra=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.root / "old-one").exists())
+
+    def _pushed_clone(self, name: str) -> Path:
+        remote = self.tmp / f"{name}.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+        src = self.tmp / f"{name}-src"
+        new_repo(src)
+        git(src, "remote", "add", "origin", str(remote))
+        git(src, "push", "-q", "origin", "HEAD:main")
+        clone = self.root / name
+        subprocess.run(["git", "clone", "-q", str(remote), str(clone)], check=True, capture_output=True)
+        return clone
+
+    def test_alternates_lender_is_kept_even_when_clean_pushed_and_idle(self):
+        lender = self._pushed_clone("lender")
+        borrower = self.root / "borrower"
+        subprocess.run(["git", "clone", "-q", "--shared", str(lender), str(borrower)], check=True, capture_output=True)
+        self.assertTrue((borrower / ".git" / "objects" / "info" / "alternates").exists())
+        backdate(self.root)
+        out = self.sweep("--verbose").stdout
+        self.assertRegex(out, r"KEEP\s+lender\s.*lends objects to another repository")
+        self.assertNotRegex(out, r"FREE\s+lender\b")
+
+    def test_lender_outside_the_root_does_not_pin_root_entries(self):
+        clone = self._pushed_clone("plain")
+        backdate(self.root)
+        out = self.sweep().stdout
+        self.assertRegex(out, r"FREE\s+plain\b")
+
+    def test_primary_hosting_a_linked_worktree_elsewhere_is_kept(self):
+        primary = self._pushed_clone("primary")
+        outside = self.tmp / "elsewhere-wt"
+        git(primary, "worktree", "add", "-q", "--detach", str(outside))
+        backdate(self.root)
+        out = self.sweep("--verbose").stdout
+        self.assertRegex(out, r"KEEP\s+primary\s.*hosts a linked worktree outside itself")
+
+    def test_idle_alone_never_authorizes_deletion(self):
+        # Idle for a year, but with an unpushed commit: idle is a filter, the keep rules decide.
+        repo = self.root / "idle-but-unpushed"
+        new_repo(repo)
+        backdate(self.root)
+        out = self.sweep("--verbose", "--older-than", "1").stdout
+        self.assertRegex(out, r"KEEP\s+idle-but-unpushed\s.*unpushed commits")
+        self.assertNotRegex(out, r"FREE\s+idle-but-unpushed\b")

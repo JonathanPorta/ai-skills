@@ -130,6 +130,27 @@ If the operator wants something kept that the report marked `FREE`, raise the
 idle threshold rather than hand-editing the list — a bigger `--older-than` is
 reviewable, a bespoke exclusion is not.
 
+## Hold, lenders, and the source layout
+
+- **Hold.** `scripts/scratch-setup.sh --hold "reason"` records `AI_SCRATCH_HOLD` in the config. While it
+  stands, every dry run prints `HOLD ACTIVE` and every `--apply` refuses (exit 3) before it reads a
+  manifest, in every session that shares the config. Name pins (`--protect`) only cover entries that
+  existed when they were written; a hold covers entries created afterwards. `--release` lifts it. Use a
+  hold whenever a recovery, migration or audit is in progress.
+- **Lenders are never reclaimable.** The sweep indexes every `objects/info/alternates` under the root,
+  its parent, and `AI_SCRATCH_LENDER_SCAN`, and keeps any entry that another repository borrows objects
+  from, however clean, pushed and idle it is. A primary that hosts a linked worktree outside itself is
+  kept for the same reason. Do not create new clones that borrow from a disposable repository
+  (`git clone --shared`, `--reference` without `--dissociate`): a borrower is only as durable as its lender,
+  and a borrower of a blob-less partial clone cannot even pass `fsck`.
+- **Idle is a filter, not an authorization.** The idle window selects what is examined; only the keep
+  rules (clean, pushed, no lender, no host, not pinned, not held) decide what is reclaimable.
+- **Source layout.** Human checkouts stay under `~/devel/portaj/<repo>`. Agent task worktrees go under
+  `~/devel/worktrees/portaj/<repo>/<task>` with an ownership record at
+  `~/devel/worktrees/.owners/<repo>/<task>.json` (owner, purpose, branch, PR, complete, released);
+  cleanup of such a worktree requires the record to say complete and released. No unique work may live
+  only under `/private/tmp`: give it a ref in the common dir before the session ends.
+
 ## Safety properties worth knowing
 
 Both scripts share one definition of a safe root, so setup cannot persist a root
