@@ -189,7 +189,8 @@ clean, every commit on a remote, no dependency, no hold) decide.
 export WT_OWNER="<session id>"                       # once per session; two sessions must never look alike
 scripts/wt.sh start <repo> <task> [--branch B] [--base REF] [--purpose TEXT]
 scripts/wt.sh list [<repo>]
-scripts/wt.sh finish <repo> <task> [--pr URL] [--note TEXT] [--release]
+scripts/wt.sh finish <repo> <task> [--pr URL] [--note TEXT] [--bundle FILE] [--release] [--no-fetch]
+scripts/wt.sh check  <repo> <task> [--for-removal] [--no-fetch]
 ```
 
 - `start` creates `~/devel/worktrees/portaj/<repo>/<task>` from the canonical
@@ -216,11 +217,18 @@ scripts/wt.sh finish <repo> <task> [--pr URL] [--note TEXT] [--release]
   records completion, names the blockers and prints the exact `update-ref` /
   `bundle create` commands that would preserve the unpublished commits locally
   (nothing is pushed). It then prints the cleanup plan and **deletes nothing**.
-- `check <repo> <task> --for-removal` is the validator the plan runs: the same
-  ownership, dependency and preservation checks against the state at that
-  moment. The plan is that one command followed by the non-forced
-  `git worktree remove`; removal stays in that flow (or the sweep, once the
-  record is complete + released and the hold is lifted).
+- `check <repo> <task> --for-removal` is the validator the plan runs and the
+  same gate list `finish --release` uses: record complete (and released),
+  repository as git reports it (a record naming another primary fails),
+  registered, not locked, clean, hosts and lends nothing, no nested repository,
+  every required commit preserved. The plan is that one command followed by the
+  non-forced `git worktree remove`; removal stays in that flow. `--no-fetch`
+  assesses offline, so only keep refs + bundle count; `finish`/`check` otherwise
+  fetch origin's default branch (and the task branch when needed) into the
+  primary's remote-tracking refs, which is the only thing they write besides the
+  record. A worktree released on keep refs + bundle is cleaned only through the
+  printed plan: the sweep's own "every commit on a remote" rule treats
+  `refs/keep/*` as local-only history and keeps every worktree of that primary.
 
 `WT_ROOT`, `WT_PRIMARIES`, `WT_BUNDLES` (default `~/devel/recovery/bundles`) and
 `WT_BRANCH_PREFIX` (default `jp/f/`) can be set in the environment or in

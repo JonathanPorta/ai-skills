@@ -237,6 +237,8 @@ class TestListAndFinish(WtFixture):
     def test_a_merged_pr_head_alone_is_not_preservation(self):
         # Squash-merge shape: the branch was pushed, the PR merged, the remote
         # branch deleted; the commits survive only through refs/pull/N/head.
+        # (wt never reads refs/pull, so what this proves is that a merged PR
+        # reported by gh does not substitute for a basis once the branch is gone.)
         path, _ = self.start()
         self.commit_in(path)
         git(path, "push", "-q", "-u", "origin", "HEAD")
@@ -340,6 +342,103 @@ class TestListAndFinish(WtFixture):
         self.assertIn("changed since it was recorded", r.stdout)
         self.assertEqual(self.wt("finish", "demo", "task1", "--bundle", str(bundle), "--release").returncode, 0)
         self.assertEqual(self.wt("check", "demo", "task1", "--for-removal").returncode, 0)
+
+    def test_no_fetch_does_not_trust_a_stale_default_branch_ref(self):
+        path, _ = self.start()
+        self.commit_in(path)
+        head = git(path, "rev-parse", "HEAD")
+        git(self.primary, "push", "-q", "origin", f"{head}:refs/heads/main")
+        self.assertEqual(self.wt("finish", "demo", "task1", "--release").returncode, 0)
+        git(self.remote, "update-ref", "refs/heads/main", git(self.remote, "rev-parse", "main~1"))   # origin/main rewound; the local tracking ref is stale
+        r = self.wt("check", "demo", "task1", "--for-removal", "--no-fetch")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("offline", r.stdout)
+        r = self.wt("finish", "demo", "task1", "--release", "--no-fetch")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('"released": false', self.record())
+        r = self.wt("check", "demo", "task1", "--for-removal")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("UNPRESERVED", r.stdout)
+
+    def test_finish_and_check_share_the_gate_list(self):
+        path, _ = self.start()
+        self.commit_in(path)
+        git(path, "push", "-q", "-u", "origin", "HEAD")
+        git(self.primary, "worktree", "lock", "--reason", "in use", str(path))
+        r = self.wt("finish", "demo", "task1", "--release")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not locked", r.stderr)
+        self.assertIn('"released": false', self.record())
+        git(self.primary, "worktree", "unlock", str(path))
+        self.assertEqual(self.wt("finish", "demo", "task1", "--release").returncode, 0)
+        self.assertEqual(self.wt("check", "demo", "task1", "--for-removal").returncode, 0)
+
+    def test_the_repository_comes_from_git_not_from_the_record(self):
+        path, _ = self.start()
+        self.commit_in(path)
+        sha = git(path, "rev-parse", "HEAD")
+        git(path, "reset", "-q", "--hard", "origin/main")
+        clone = self.tmp / "clone"
+        subprocess.run(["git", "clone", "-q", str(self.primary), str(clone)], check=True, capture_output=True)
+        git(clone, "fetch", "-q", str(self.primary), f"{sha}:refs/keep/task1-{sha[:7]}")
+        bundle = self.tmp / "clone.bundle"
+        git(clone, "bundle", "create", str(bundle), f"refs/keep/task1-{sha[:7]}")
+        rec_path = self.owners / "demo" / "task1.json"
+        rec_path.write_text(rec_path.read_text().replace('"primary": "%s"' % os.path.realpath(self.primary), '"primary": "%s"' % clone))
+        r = self.wt("finish", "demo", "task1", "--bundle", str(bundle), "--release")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("worktree belongs to", r.stderr)
+        self.assertIn('"released": false', self.record())
+        r = self.wt("check", "demo", "task1")
+        self.assertIn("FAIL  repository", r.stdout)
+
+    def test_a_bundle_inside_the_worktree_is_refused(self):
+        path, _ = self.start()
+        self.commit_in(path)
+        sha = git(path, "rev-parse", "HEAD")
+        git(path, "reset", "-q", "--hard", "origin/main")
+        git(self.primary, "update-ref", f"refs/keep/task1-{sha[:7]}", sha)
+        inside = path / ".tmp"
+        inside.mkdir()
+        (path / ".git" / "info").mkdir(parents=True, exist_ok=True) if (path / ".git").is_dir() else None
+        bundle = inside / "k.bundle"
+        git(self.primary, "bundle", "create", str(bundle), f"refs/keep/task1-{sha[:7]}")
+        r = self.wt("finish", "demo", "task1", "--bundle", str(bundle), "--release")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("inside the worktree", r.stderr + r.stdout)
+        self.assertIn('"released": false', self.record())
+
+    def test_a_full_bundle_with_the_default_branch_restores(self):
+        path, _ = self.start()
+        self.commit_in(path)
+        sha = git(path, "rev-parse", "HEAD")
+        git(path, "reset", "-q", "--hard", "origin/main")
+        git(self.primary, "update-ref", f"refs/keep/task1-{sha[:7]}", sha)
+        bundle = self.tmp / "all.bundle"
+        git(self.primary, "bundle", "create", str(bundle), "--all")
+        r = self.wt("finish", "demo", "task1", "--bundle", str(bundle), "--release")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertIn('"released": true', self.record())
+
+    def test_the_printed_remedy_runs_and_then_releases(self):
+        path, _ = self.start()
+        self.commit_in(path)
+        sha = git(path, "rev-parse", "HEAD")
+        git(path, "reset", "-q", "--hard", "origin/main")
+        env = dict(os.environ, AI_SCRATCH_CONFIG_DIR=str(self.cfg), WT_ROOT=str(self.wt_root),
+                   WT_PRIMARIES=str(self.primaries), WT_OWNER="session-A", WT_BUNDLES=str(self.tmp / "bundles"))
+        r = subprocess.run(["bash", str(WT), "finish", "demo", "task1", "--release"], capture_output=True, text=True, env=env, timeout=60)
+        self.assertNotEqual(r.returncode, 0)
+        remedy = "set -e\n" + "\n".join(l.strip() for l in r.stderr.splitlines() if l.startswith("  "))
+        self.assertIn("mkdir -p", remedy)
+        done = subprocess.run(["bash", "-c", remedy], capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, remedy + done.stderr)
+        bundle = self.tmp / "bundles" / "demo-task1-keeps.bundle"
+        self.assertTrue(bundle.exists())
+        r = subprocess.run(["bash", str(WT), "finish", "demo", "task1", "--bundle", str(bundle), "--release"], capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertIn('"released": true', self.record())
+        self.assertIn(sha, self.record())
 
     def test_the_plan_runs_the_same_validator(self):
         path, _ = self.start()
