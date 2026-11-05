@@ -3,7 +3,8 @@
 #
 #   wt.sh start  <repo> <task> [--branch B] [--base REF] [--purpose TEXT] [--owner ID] [--no-fetch]
 #   wt.sh list   [<repo>]
-#   wt.sh finish <repo> <task> [--pr URL] [--note TEXT] [--release] [--owner ID]
+#   wt.sh finish <repo> <task> [--pr URL] [--note TEXT] [--bundle FILE] [--release] [--owner ID] [--no-fetch]
+#   wt.sh check  <repo> <task> [--for-removal] [--no-fetch]
 #
 # start   creates (or, for the same owner, resumes) ~/devel/worktrees/portaj/<repo>/<task>
 #         from the canonical primary ~/devel/portaj/<repo> without touching the branch
@@ -12,6 +13,12 @@
 # finish  records completion (and, with --release, release) plus the preservation
 #         evidence, then prints the exact cleanup plan. It deletes NOTHING; removal
 #         stays in the verified, non-forced `git worktree remove` flow.
+# check   the validator the plan runs: ownership, dependency and preservation
+#         checks against the current state (fetches origin's default branch,
+#         restores the recorded bundle into an empty repository offline).
+#         Preservation = reachable from the current remote default branch, or
+#         from the live tip of the branch on origin, or a local keep ref plus a
+#         restore-tested bundle. A merged PR's head ref alone is not enough.
 #
 # Ownership records are the flat JSON files scratch-sweep.sh consumes (see
 # scratch_owner_record_parse in lib-scratch.sh); there is one format, not two.
@@ -33,6 +40,7 @@ expand_dir() {  # <value> <default>: tilde expanded, must be absolute
 WT_ROOT="$(expand_dir "${WT_ROOT:-$(scratch_config_get WT_ROOT)}" "$HOME/devel/worktrees/portaj" WT_ROOT)" || exit 2
 WT_PRIMARIES="$(expand_dir "${WT_PRIMARIES:-$(scratch_config_get WT_PRIMARIES)}" "$HOME/devel/portaj" WT_PRIMARIES)" || exit 2
 WT_BRANCH_PREFIX="${WT_BRANCH_PREFIX:-$(scratch_config_get WT_BRANCH_PREFIX)}"; WT_BRANCH_PREFIX="${WT_BRANCH_PREFIX:-jp/f/}"
+WT_BUNDLES="$(expand_dir "${WT_BUNDLES:-$(scratch_config_get WT_BUNDLES)}" "$HOME/devel/recovery/bundles" WT_BUNDLES)" || exit 2
 OWNERS_DIR="$(scratch_owners_dir)"
 export GIT_OPTIONAL_LOCKS=0 GIT_NO_LAZY_FETCH=1
 g() { git -c core.fsmonitor=false -c gc.auto=0 "$@"; }
@@ -243,70 +251,183 @@ cmd_list() {
   done <"$idx"
 }
 
-cmd_finish() {
+# --- preservation (one assessment, used by finish --release, check and the plan) ---
+# Required history = HEAD plus every SHA in the worktree's private HEAD reflog.
+# A SHA is preserved when ONE of these holds, verified against the CURRENT state:
+#   1. it is reachable from the remote default branch, fetched now from origin
+#      (refs/remotes/origin/<default> after an explicit fetch);
+#   2. it is reachable from the live tip of its own branch on origin (ls-remote),
+#      with that tip present locally (fetched now if needed);
+#   3. a local keep ref (refs/keep/*) in the common dir reaches it AND a bundle
+#      named by the record contains it, which is proven by restoring that bundle
+#      into an empty repository offline every time (never trusted from a note).
+# A merged PR's head ref, a stale remote-tracking ref or a free-text note is not
+# evidence. Sets ASSESS_* variables; nothing is written.
+assess_preservation() {  # <wt> <primary> <bundle-path-or-empty> <recorded-bundle-sha-or-empty> <fetch 0/1>
+  local wt="$1" primary="$2" bundle="$3" rec_sha="$4" fetch="$5" head branch adm s def tip
+  ASSESS_REQUIRED=""; ASSESS_UNPRESERVED=""; ASSESS_BASIS=""; ASSESS_ERROR=""; ASSESS_BUNDLE_SHA=""; ASSESS_BUNDLE_COMMITS=""; ASSESS_DEFAULT=""; ASSESS_BUNDLE_OK=0
+  head="$(g -C "$wt" rev-parse HEAD 2>/dev/null)" || { ASSESS_ERROR="cannot read HEAD"; return 1; }
+  branch="$(g -C "$wt" symbolic-ref -q --short HEAD 2>/dev/null || printf '')"
+  adm="$(g -C "$wt" rev-parse --absolute-git-dir 2>/dev/null)" || adm=""
+  ASSESS_REQUIRED="$head"
+  if [ -n "$adm" ] && [ -f "$adm/logs/HEAD" ]; then
+    for s in $(cut -d' ' -f2 "$adm/logs/HEAD" | sort -u); do
+      case " $ASSESS_REQUIRED " in *" $s "*) ;; *) ASSESS_REQUIRED="$ASSESS_REQUIRED $s";; esac
+    done
+  fi
+  # 1. the remote default branch, current
+  def="$(g -C "$primary" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')"
+  if [ -z "$def" ] && [ "$fetch" = 1 ]; then
+    def="$(g -C "$primary" ls-remote --symref origin HEAD 2>/dev/null | sed -n 's|^ref: refs/heads/\([^[:space:]]*\)[[:space:]]*HEAD$|\1|p' | head -1)"
+  fi
+  def="${def:-main}"; ASSESS_DEFAULT="$def"
+  if [ "$fetch" = 1 ]; then
+    g -C "$primary" fetch -q origin "+refs/heads/$def:refs/remotes/origin/$def" 2>/dev/null || { ASSESS_ERROR="cannot fetch origin/$def (origin unreachable?); run with --no-fetch to assess offline on keep refs + bundle only"; return 1; }
+    if [ -n "$branch" ]; then
+      tip="$(g -C "$wt" ls-remote origin "refs/heads/$branch" 2>/dev/null | cut -f1 | head -1)"
+      [ -z "$tip" ] || g -C "$primary" cat-file -e "$tip^{commit}" 2>/dev/null || g -C "$primary" fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null || tip=""
+    fi
+  fi
+  # 3. keep refs + bundle, restored offline into a fresh empty repository
+  local restore="$WT_TMP/restore" keeps=""
+  keeps="$(g -C "$primary" for-each-ref --format='%(refname) %(objectname)' refs/keep 2>/dev/null)"
+  if [ -n "$bundle" ]; then
+    if [ ! -f "$bundle" ]; then ASSESS_ERROR="bundle $bundle is missing"
+    else
+      ASSESS_BUNDLE_SHA="$(scratch_sha256 "$bundle")"
+      if [ -n "$rec_sha" ] && [ "$rec_sha" != "$ASSESS_BUNDLE_SHA" ]; then ASSESS_ERROR="bundle $bundle changed since it was recorded (sha256 differs)"
+      elif ! git init -q "$restore" 2>/dev/null || ! GIT_NO_LAZY_FETCH=1 git -C "$restore" -c gc.auto=0 fetch -q "$bundle" '+refs/*:refs/*' 2>/dev/null; then ASSESS_ERROR="bundle $bundle does not restore into an empty repository"
+      elif ! git -C "$restore" fsck --connectivity-only >/dev/null 2>&1; then ASSESS_ERROR="bundle $bundle restores with broken connectivity"
+      else ASSESS_BUNDLE_OK=1; fi
+    fi
+  fi
+  for s in $ASSESS_REQUIRED; do
+    if g -C "$primary" merge-base --is-ancestor "$s" "refs/remotes/origin/$def" 2>/dev/null; then
+      ASSESS_BASIS="$ASSESS_BASIS${ASSESS_BASIS:+; }${s:0:7}: on origin/$def"; continue
+    fi
+    if [ -n "${tip:-}" ] && g -C "$primary" merge-base --is-ancestor "$s" "$tip" 2>/dev/null; then
+      ASSESS_BASIS="$ASSESS_BASIS${ASSESS_BASIS:+; }${s:0:7}: on origin/$branch (live tip ${tip:0:7})"; continue
+    fi
+    if [ "$ASSESS_BUNDLE_OK" = 1 ] && git -C "$restore" cat-file -e "$s^{commit}" 2>/dev/null; then
+      local kept=""
+      while read -r kref ksha; do
+        [ -n "$kref" ] || continue
+        if g -C "$primary" merge-base --is-ancestor "$s" "$ksha" 2>/dev/null; then kept="$kref"; break; fi
+      done <<EOF2
+$keeps
+EOF2
+      if [ -n "$kept" ]; then
+        ASSESS_BASIS="$ASSESS_BASIS${ASSESS_BASIS:+; }${s:0:7}: $kept + bundle"; ASSESS_BUNDLE_COMMITS="$ASSESS_BUNDLE_COMMITS${ASSESS_BUNDLE_COMMITS:+ }$s"; continue
+      fi
+    fi
+    ASSESS_UNPRESERVED="$ASSESS_UNPRESERVED${ASSESS_UNPRESERVED:+ }$s"
+  done
+  [ -z "$ASSESS_ERROR" ]
+}
+
+# The validator behind finish --release and the printed plan: every gate that
+# must hold before a non-forced `git worktree remove`, against the current state.
+# Prints one line per gate; exit 0 only when all pass. Nothing is written.
+cmd_check() {
   local repo="${1:-}" task="${2:-}"; shift 2 2>/dev/null || usage
-  local pr="" note="" release=0
+  local for_removal=0 fetch=1
   while [ $# -gt 0 ]; do
     case "$1" in
-      --pr)    scratch_need_value $# "$1"; pr="$2"; shift 2;;
-      --note)  scratch_need_value $# "$1"; note="$2"; shift 2;;
-      --owner) scratch_need_value $# "$1"; OWNER_OPT="$2"; shift 2;;
-      --release) release=1; shift;;
+      --for-removal) for_removal=1; shift;;
+      --no-fetch) fetch=0; shift;;
       *) die "unknown option: $1" 2;;
     esac
   done
   name_ok "$repo" && name_ok "$task" || die "repo and task must be plain names" 2
-  scratch_text_is_sane "${pr:-x}" && scratch_text_is_sane "${note:-x}" || die "option values contain control characters" 2
+  local fails=0
+  gate() { if [ "$1" = 0 ]; then printf 'PASS  %s\n' "$2"; else printf 'FAIL  %s\n' "$2"; fails=$((fails + 1)); fi; }
+  load_record "$repo" "$task" || die "no ownership record for $repo/$task at $OWNERS_DIR/$repo/$task.json"
+  [ "$REC_STATUS" = malformed ] && die "record $REC is malformed; fix it by hand"
+  local wt="$REC_WT" primary; primary="$(scratch_owner_record_get "$REC" primary)"
+  [ -d "$wt" ] || die "worktree $wt is missing"
+  [ -n "$primary" ] || primary="$(g -C "$wt" rev-parse --git-common-dir 2>/dev/null)"; primary="${primary%/.git}"
+  local complete; complete="$(scratch_owner_record_dump "$REC" | LC_ALL=C awk -F '\t' '$1 == "complete" { print $3 }')"
+  gate "$([ "$complete" = true ] && echo 0 || echo 1)" "record says complete"
+  [ "$for_removal" = 1 ] && gate "$([ "$REC_STATUS" = released ] && echo 0 || echo 1)" "record says released"
+  local entry; entry="$(g -C "$primary" worktree list --porcelain 2>/dev/null | LC_ALL=C grep -A3 -xF "worktree $wt")"
+  gate "$([ -n "$entry" ] && echo 0 || echo 1)" "registered in $primary"
+  gate "$(printf '%s' "$entry" | grep -q '^locked' && echo 1 || echo 0)" "not locked"
+  local dirty; dirty="$(g -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+  gate "$([ "$dirty" = 0 ] && echo 0 || echo 1)" "clean working tree and index ($dirty change(s))"
+  gate "$([ ! -d "$wt/.git/worktrees" ] && echo 0 || echo 1)" "hosts no worktrees"
+  gate "$([ -z "$(LC_ALL=C grep -lsxF -e "$wt/.git/objects" -e "$wt/.git/objects/" "$WT_PRIMARIES"/*/.git/objects/info/alternates "$WT_ROOT"/*/*/.git/objects/info/alternates 2>/dev/null)" ] && echo 0 || echo 1)" "lends no objects"
+  gate "$([ -z "$(find "$wt" -mindepth 2 -name .git -not -path "$wt/.git/*" 2>/dev/null | head -1)" ] && echo 0 || echo 1)" "no nested repository"
+  local bundle rec_sha
+  bundle="$(scratch_owner_record_get "$REC" preserved_bundle)"; rec_sha="$(scratch_owner_record_get "$REC" preserved_bundle_sha256)"
+  if assess_preservation "$wt" "$primary" "$bundle" "$rec_sha" "$fetch"; then
+    gate "$([ -z "$ASSESS_UNPRESERVED" ] && echo 0 || echo 1)" "history preserved (${ASSESS_BASIS:-nothing required}${ASSESS_UNPRESERVED:+; UNPRESERVED: $ASSESS_UNPRESERVED})"
+  else
+    gate 1 "history preserved (could not assess: $ASSESS_ERROR)"
+  fi
+  [ "$fails" = 0 ] && { printf 'OK  %s/%s passes every check%s\n' "$repo" "$task" "$([ "$for_removal" = 1 ] && printf ' for removal')"; return 0; }
+  printf 'NOT OK  %s/%s: %s check(s) failed\n' "$repo" "$task" "$fails"; return 1
+}
+
+cmd_finish() {
+  local repo="${1:-}" task="${2:-}"; shift 2 2>/dev/null || usage
+  local pr="" note="" release=0 bundle_opt="" fetch=1
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --pr)     scratch_need_value $# "$1"; pr="$2"; shift 2;;
+      --note)   scratch_need_value $# "$1"; note="$2"; shift 2;;
+      --owner)  scratch_need_value $# "$1"; OWNER_OPT="$2"; shift 2;;
+      --bundle) scratch_need_value $# "$1"; bundle_opt="$2"; shift 2;;
+      --release) release=1; shift;;
+      --no-fetch) fetch=0; shift;;
+      *) die "unknown option: $1" 2;;
+    esac
+  done
+  name_ok "$repo" && name_ok "$task" || die "repo and task must be plain names" 2
+  scratch_text_is_sane "${pr:-x}" && scratch_text_is_sane "${note:-x}" && scratch_text_is_sane "${bundle_opt:-x}" || die "option values contain control characters" 2
   local me; me="$(owner_id)"
   load_record "$repo" "$task" || die "no ownership record for $repo/$task at $OWNERS_DIR/$repo/$task.json"
   [ "$REC_STATUS" = malformed ] && die "record $REC is malformed; fix it by hand"
   [ "$REC_OWNER" = "$me" ] || die "task $repo/$task is owned by '$REC_OWNER'; only the owner records completion or release"
   local wt="$REC_WT" primary; primary="$(scratch_owner_record_get "$REC" primary)"
   [ -d "$wt" ] || die "worktree $wt is missing; nothing to assess (record left as is)"
-  local branch head upstream dirty unpushed reflog_unreach=0 adm="" s
+  [ -n "$primary" ] || primary="$(g -C "$wt" rev-parse --git-common-dir 2>/dev/null)"; primary="${primary%/.git}"
+  local branch head upstream dirty
   branch="$(g -C "$wt" symbolic-ref -q --short HEAD 2>/dev/null || printf '(detached)')"
   head="$(g -C "$wt" rev-parse HEAD 2>/dev/null)" || die "cannot read HEAD in $wt"
-  # The upstream is evidence only when it actually contains HEAD (a branch cut
-  # with tracking from origin/main would otherwise "have an upstream" unpushed).
   upstream="$(g -C "$wt" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)" || upstream=""
   if [ -n "$upstream" ] && ! g -C "$wt" merge-base --is-ancestor "$head" "$upstream" 2>/dev/null; then upstream=""; fi
   dirty="$(g -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
-  unpushed="$(g -C "$wt" rev-list --count HEAD --not --remotes 2>/dev/null)" || die "cannot count commits on no remote in $wt (git rev-list failed); nothing recorded"
-  # The worktree's private HEAD reflog lives in its admin dir; ask git where that is
-  # rather than trusting the record's spelling of the primary.
-  adm="$(g -C "$wt" rev-parse --absolute-git-dir 2>/dev/null)" || adm=""
-  [ -n "$primary" ] || primary="$(g -C "$wt" rev-parse --git-common-dir 2>/dev/null)"; primary="${primary%/.git}"
-  # A rev-list that fails counts the commit as unreachable: an error is not evidence.
-  unreachable() { local out; out="$(g -C "$wt" rev-list --max-count=1 "$1" --not --remotes 2>/dev/null)" || return 0; [ -n "$out" ]; }
-  if [ -n "$adm" ] && [ -f "$adm/logs/HEAD" ]; then
-    for s in $(cut -d' ' -f2 "$adm/logs/HEAD" | sort -u); do unreachable "$s" && reflog_unreach=$((reflog_unreach + 1)); done
+  # The bundle: the one given now, else the one already recorded. Its sha256 is
+  # recorded so a later run notices a replaced file.
+  local bundle rec_sha
+  if [ -n "$bundle_opt" ]; then
+    case "$bundle_opt" in /*) bundle="$bundle_opt";; *) bundle="$PWD/$bundle_opt";; esac; rec_sha=""
+  else
+    bundle="$(scratch_owner_record_get "$REC" preserved_bundle)"; rec_sha="$(scratch_owner_record_get "$REC" preserved_bundle_sha256)"
   fi
-  # A merged PR whose head is this HEAD preserves every commit of this branch on
-  # GitHub (refs/pull/N/head keeps them retrievable after a squash merge deletes
-  # the branch), so "on no remote-tracking ref" is not "unpreserved" in that case.
-  # gh is PATH-resolved and the PR URL is owner-supplied: this is the owner's
-  # statement, like --owner, not an independent check.
+  assess_preservation "$wt" "$primary" "$bundle" "$rec_sha" "$fetch" || die "cannot assess preservation: $ASSESS_ERROR; nothing recorded"
+  # PR state is informational: a PR head ref alone is not preservation.
   [ -n "$pr" ] || pr="$(scratch_owner_record_get "$REC" pr)"
-  local pr_state="" pr_head="" merged_here=0 preserved_by="" pr_num=""
+  local pr_state=""
   if [ -n "$pr" ] && command -v gh >/dev/null 2>&1; then
     case "$pr" in *github.com/*/pull/*)
-      local slug; slug="$(printf '%s' "$pr" | sed -E 's#.*github\.com/([^/]+/[^/]+)/pull/.*#\1#')"; pr_num="${pr##*/}"
-      pr_state="$(gh api "repos/$slug/pulls/$pr_num" --jq '"\(.state) merged=\(.merged) head=\(.head.sha)"' 2>/dev/null)" || pr_state="lookup failed"
-      case "$pr_state" in *"merged=true head=$head"*) merged_here=1; pr_head="$head";; esac;;
+      local slug num; slug="$(printf '%s' "$pr" | sed -E 's#.*github\.com/([^/]+/[^/]+)/pull/.*#\1#')"; num="${pr##*/}"
+      pr_state="$(gh api "repos/$slug/pulls/$num" --jq '"\(.state) merged=\(.merged) head=\(.head.sha)"' 2>/dev/null)" || pr_state="lookup failed";;
     esac
   fi
-  if [ "$merged_here" = 1 ]; then
-    unpushed=0
-    preserved_by="HEAD is the merged head of $pr (retrievable through refs/pull/$pr_num/head)"
-    # Private-reflog commits that are ancestors of the merged head are preserved with it.
-    if [ -n "$adm" ] && [ -f "$adm/logs/HEAD" ]; then
-      reflog_unreach=0
-      for s in $(cut -d' ' -f2 "$adm/logs/HEAD" | sort -u); do
-        unreachable "$s" || continue
-        g -C "$wt" merge-base --is-ancestor "$s" "$pr_head" 2>/dev/null || reflog_unreach=$((reflog_unreach + 1))
-      done
-    fi
+  local hosts=0 lends=0 nested=0
+  [ -d "$wt/.git/worktrees" ] && hosts=1
+  [ -n "$(LC_ALL=C grep -lsxF -e "$wt/.git/objects" -e "$wt/.git/objects/" "$WT_PRIMARIES"/*/.git/objects/info/alternates "$WT_ROOT"/*/*/.git/objects/info/alternates 2>/dev/null)" ] && lends=1
+  [ -n "$(find "$wt" -mindepth 2 -name .git -not -path "$wt/.git/*" 2>/dev/null | head -1)" ] && nested=1
+  local blockers="" n_unp=0
+  [ "$dirty" = 0 ] || blockers="$blockers${blockers:+; }$dirty uncommitted change(s)"
+  if [ -n "$ASSESS_UNPRESERVED" ]; then
+    n_unp="$(printf '%s\n' $ASSESS_UNPRESERVED | wc -l | tr -d ' ')"
+    blockers="$blockers${blockers:+; }$n_unp commit(s) with no preservation basis: $ASSESS_UNPRESERVED"
   fi
+  [ "$hosts" = 0 ] || blockers="$blockers${blockers:+; }hosts worktrees"
+  [ "$lends" = 0 ] || blockers="$blockers${blockers:+; }lends objects"
+  [ "$nested" = 0 ] || blockers="$blockers${blockers:+; }contains a nested repository"
   local t; t="$(now)"
   {
     printf 'complete\tbool\ttrue\n'
@@ -319,15 +440,20 @@ cmd_finish() {
     printf 'branch\tstring\t%s\n' "$branch"
     printf 'upstream\tstring\t%s\n' "$upstream"
     printf 'dirty_at_finish\tnumber\t%s\n' "$dirty"
-    printf 'unpushed_at_finish\tnumber\t%s\n' "${unpushed:-0}"
-    printf 'preserved_by\tstring\t%s\n' "$preserved_by"
-    printf 'private_reflog_unreachable_at_finish\tnumber\t%s\n' "$reflog_unreach"
+    printf 'required_commits\tstring\t%s\n' "$ASSESS_REQUIRED"
+    printf 'preservation_basis\tstring\t%s\n' "$ASSESS_BASIS"
+    printf 'unpreserved_at_finish\tnumber\t%s\n' "$n_unp"
+    # The bundle is recorded only when it actually covers something required and
+    # restored cleanly; the sha256 binds the record to that exact file.
+    if [ "$ASSESS_BUNDLE_OK" = 1 ] && [ -n "$ASSESS_BUNDLE_COMMITS" ]; then
+      printf 'preserved_bundle\tstring\t%s\n' "$bundle"
+      printf 'preserved_bundle_sha256\tstring\t%s\n' "$ASSESS_BUNDLE_SHA"
+      printf 'preserved_bundle_commits\tstring\t%s\n' "$ASSESS_BUNDLE_COMMITS"
+      printf 'preserved_repository\tstring\t%s\n' "$(g -C "$primary" remote get-url origin 2>/dev/null || printf '%s' "$primary")"
+    else
+      printf 'preserved_bundle\tstring\t\n'; printf 'preserved_bundle_sha256\tstring\t\n'; printf 'preserved_bundle_commits\tstring\t\n'; printf 'preserved_repository\tstring\t\n'
+    fi
   } >"$WT_TMP/ov"
-  local blockers=""
-  [ "$dirty" = 0 ] || blockers="$blockers${blockers:+; }$dirty uncommitted change(s)"
-  [ "${unpushed:-1}" = 0 ] || blockers="$blockers${blockers:+; }$unpushed commit(s) on no remote"
-  [ "$reflog_unreach" = 0 ] || blockers="$blockers${blockers:+; }$reflog_unreach private-reflog commit(s) reachable from no remote (push or bundle them, or expire that reflog entry by hand if the object is gone)"
-  [ -n "$upstream" ] || [ "$merged_here" = 1 ] || blockers="$blockers${blockers:+; }no upstream branch (push it, or record the merged PR)"
   # Every finish states released explicitly: a stale "released": true from an
   # earlier run must never survive a later finish that found unpreserved work.
   if [ "$release" = 1 ] && [ -z "$blockers" ]; then
@@ -338,34 +464,34 @@ cmd_finish() {
     printf 'released_at\tstring\t\n' >>"$WT_TMP/ov"
   fi
   local was_released=0; [ "$REC_STATUS" = released ] && was_released=1
+  update_record "$REC" "$WT_TMP/ov"
   if [ "$release" = 1 ] && [ -n "$blockers" ]; then
-    update_record "$REC" "$WT_TMP/ov"
     [ "$was_released" = 1 ] && printf 'wt: the earlier release of %s/%s is WITHDRAWN\n' "$repo" "$task" >&2
+    if [ -n "$ASSESS_UNPRESERVED" ]; then
+      printf 'wt: to preserve the unpublished history locally (then run finish --bundle <file> --release):\n' >&2
+      for s in $ASSESS_UNPRESERVED; do printf '  git -C %s update-ref refs/keep/%s-%s %s\n' "$(shq "$primary")" "$task" "${s:0:7}" "$s" >&2; done
+      printf '  git -C %s bundle create %s $(git -C %s for-each-ref --format="%%(refname)" "refs/keep/%s-*")\n' "$(shq "$primary")" "$(shq "$WT_BUNDLES/$repo-$task-keeps.bundle")" "$(shq "$primary")" "$task" >&2
+    fi
     die "recorded completion, but NOT released: $blockers. Fix those and run finish --release again."
   fi
   if [ "$release" != 1 ] && [ "$was_released" = 1 ]; then
     printf 'wt: the earlier release of %s/%s is WITHDRAWN (every finish states the release afresh; run finish --release again)\n' "$repo" "$task" >&2
   fi
-  update_record "$REC" "$WT_TMP/ov"
   printf 'recorded %s for %s/%s (record %s)\n' "$([ "$release" = 1 ] && printf 'completion + release' || printf 'completion')" "$repo" "$task" "$REC"
-  printf '  head %s  branch %s  upstream %s  dirty %s  unpushed %s  private-reflog unreachable %s%s\n' "${head:0:7}" "$branch" "${upstream:-none}" "$dirty" "$unpushed" "$reflog_unreach" "${pr_state:+  PR $pr_state}"
-  [ -z "$blockers" ] || printf '  preservation blockers: %s\n' "$blockers"
-  local q_wt q_rec q_primary; q_wt="$(shq "$wt")"; q_rec="$(shq "$REC")"; q_primary="$(shq "${primary:-<primary>}")"
+  printf '  head %s  branch %s  upstream %s  dirty %s  required commits %s  unpreserved %s%s\n' "${head:0:7}" "$branch" "${upstream:-none}" "$dirty" "$(printf '%s\n' $ASSESS_REQUIRED | wc -l | tr -d ' ')" "$n_unp" "${pr_state:+  PR $pr_state}"
+  [ -z "$ASSESS_BASIS" ] || printf '  preservation: %s\n' "$ASSESS_BASIS"
+  [ -z "$blockers" ] || printf '  blockers: %s\n' "$blockers"
+  # The plan runs the SAME validator (ownership, dependency and preservation
+  # checks, against the state at that moment), then the one non-forced removal.
+  local me_q envs=""
+  [ -n "${AI_SCRATCH_CONFIG_DIR:-}" ] && envs="AI_SCRATCH_CONFIG_DIR=$(shq "$AI_SCRATCH_CONFIG_DIR") "
+  envs="${envs}WT_ROOT=$(shq "$WT_ROOT") WT_PRIMARIES=$(shq "$WT_PRIMARIES")"
   printf '\n# Cleanup plan for %s (NOTHING below was executed; wt never deletes)\n' "$wt"
-  printf '# Re-check seconds before removal, in this order, and stop on the first failure:\n'
-  # Plain [ ] tests only: a line starting with "!" is exempt from set -e, so a
-  # plan run under set -e would not stop on it.
-  printf 'wt_entry="$(git -C %s worktree list --porcelain | grep -A3 -xF "worktree $(printf %%s %s)")"; [ -n "$wt_entry" ] && [ -z "$(printf %%s "$wt_entry" | grep "^locked")" ]   # registered, not locked\n' "$q_primary" "$q_wt"
-  printf '[ -z "$(git -C %s status --porcelain)" ]   # clean\n' "$q_wt"
-  if [ "$merged_here" = 1 ]; then
-    printf 'git -C %s fetch origin "+refs/pull/%s/head:refs/remotes/origin/pull/%s/head"   # the merged PR head, so the next check (and the sweep) can see the commits are on a remote\n' "$q_primary" "$pr_num" "$pr_num"
-  fi
-  printf '[ "$(git -C %s rev-list --count HEAD --not --remotes)" = 0 ]   # every commit on a remote\n' "$q_wt"
-  printf '[ ! -d %s ] && [ -z "$(grep -lsxF -e %s -e %s %s/*/.git/objects/info/alternates)" ]   # hosts nothing, lends nothing\n' "$(shq "$wt/.git/worktrees")" "$(shq "$wt/.git/objects")" "$(shq "$wt/.git/objects/")" "$(shq "$WT_PRIMARIES")"
-  printf 'grep -q %s %s   # the owner has released it\n' "$(shq '"released": true')" "$q_rec"
+  printf '# Re-run the validator seconds before removal; stop if it is NOT OK:\n'
+  printf '%s %s check %s %s --for-removal   # record complete + released, registered, not locked, clean, hosts/lends nothing, no nested repo, every required commit preserved (fetches origin/%s and restores the recorded bundle offline)\n' "$envs" "$(shq "$here/wt.sh")" "$(shq "$repo")" "$(shq "$task")" "$ASSESS_DEFAULT"
   printf '# then, and only then, the non-forced removal (never --force, never prune, never gc):\n'
-  printf 'git -C %s worktree remove %s\n' "$q_primary" "$q_wt"
-  printf '# the branch %s stays in the primary; delete it separately only after the PR is merged, by hand. The record stays as history.\n' "$(shq "$branch")"
+  printf 'git -C %s worktree remove %s\n' "$(shq "$primary")" "$(shq "$wt")"
+  printf '# the branch %s and any refs/keep/* stay in the primary; the record stays as history.\n' "$(shq "$branch")"
 }
 
 # Single-quote a value for a shell plan.
@@ -379,6 +505,7 @@ case "$cmd" in
   start)  cmd_start "$@";;
   list)   cmd_list "$@";;
   finish) cmd_finish "$@";;
+  check)  cmd_check "$@";;
   -h|--help|help|'') usage 0;;
   *) die "unknown command: $cmd" 2;;
 esac

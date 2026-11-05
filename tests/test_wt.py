@@ -188,7 +188,7 @@ class TestListAndFinish(WtFixture):
         rec = self.record()
         self.assertIn('"complete": true', rec)
         self.assertIn('"released": false', rec)
-        self.assertIn('"unpushed_at_finish": 1', rec)
+        self.assertIn('"unpreserved_at_finish": 1', rec)
         self.assertTrue(path.exists(), "finish deleted a worktree")
 
     def test_finish_releases_once_everything_is_on_a_remote_and_prints_a_plan_without_executing_it(self):
@@ -223,39 +223,138 @@ class TestListAndFinish(WtFixture):
         git(path, "reset", "-q", "--hard", "origin/main")   # the commit now lives only in the worktree's reflog
         r = self.wt("finish", "demo", "task1", "--release")
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("private-reflog", r.stderr)
+        self.assertIn("no preservation basis", r.stderr)
         self.assertIn('"released": false', self.record())
 
-    def test_a_merged_pr_whose_head_is_this_head_counts_as_preserved(self):
-        # After a squash merge the remote branch is gone, so "on no remote" is
-        # true, but refs/pull/N/head keeps the commits; a gh shim reports the
-        # merged PR head and finish --release must accept it.
-        path, _ = self.start()
-        self.commit_in(path)
-        head = git(path, "rev-parse", "HEAD")
+    def _gh_shim(self, head: str) -> dict:
         shim = self.tmp / "shim"
-        shim.mkdir()
+        shim.mkdir(exist_ok=True)
         (shim / "gh").write_text('#!/bin/sh\necho "$@" >> "%s"\nprintf \'closed merged=true head=%s\\n\'\n' % (self.tmp / "gh-args", head))
         (shim / "gh").chmod(0o755)
-        env = dict(os.environ, AI_SCRATCH_CONFIG_DIR=str(self.cfg), WT_ROOT=str(self.wt_root),
-                   WT_PRIMARIES=str(self.primaries), WT_OWNER="session-A", PATH=f"{shim}{os.pathsep}{os.environ['PATH']}")
-        r = subprocess.run(["bash", str(WT), "finish", "demo", "task1", "--pr", "https://github.com/x/y/pull/7", "--release"],
-                           capture_output=True, text=True, env=env, timeout=60)
-        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
-        rec = self.record()
-        self.assertIn('"released": true', rec)
-        self.assertIn('"preserved_by": "HEAD is the merged head of https://github.com/x/y/pull/7', rec)
-        self.assertIn('"pr_state": "closed merged=true head=%s"' % head, rec)
-        self.assertIn("api repos/x/y/pulls/7 --jq", (self.tmp / "gh-args").read_text())
-        self.assertIn("fetch origin \"+refs/pull/7/head:refs/remotes/origin/pull/7/head\"", r.stdout)
-        # A different merged head does not count.
-        (shim / "gh").write_text('#!/bin/sh\nprintf \'closed merged=true head=0000000\\n\'\n')
-        rec_path = self.owners / "demo" / "task1.json"
-        rec_path.write_text(rec_path.read_text().replace('"released": true', '"released": false'))   # reset the record
+        return dict(os.environ, AI_SCRATCH_CONFIG_DIR=str(self.cfg), WT_ROOT=str(self.wt_root),
+                    WT_PRIMARIES=str(self.primaries), WT_OWNER="session-A", PATH=f"{shim}{os.pathsep}{os.environ['PATH']}")
+
+    def test_a_merged_pr_head_alone_is_not_preservation(self):
+        # Squash-merge shape: the branch was pushed, the PR merged, the remote
+        # branch deleted; the commits survive only through refs/pull/N/head.
+        path, _ = self.start()
+        self.commit_in(path)
+        git(path, "push", "-q", "-u", "origin", "HEAD")
+        git(path, "push", "-q", "origin", "--delete", "jp/f/task1")
+        head = git(path, "rev-parse", "HEAD")
+        env = self._gh_shim(head)
         r = subprocess.run(["bash", str(WT), "finish", "demo", "task1", "--pr", "https://github.com/x/y/pull/7", "--release"],
                            capture_output=True, text=True, env=env, timeout=60)
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("NOT released", r.stderr)
+        self.assertIn("no preservation basis", r.stderr)
+        self.assertIn("update-ref refs/keep/task1-", r.stderr)
+        rec = self.record()
+        self.assertIn('"released": false', rec)
+        self.assertIn('"pr_state": "closed merged=true head=%s"' % head, rec)
+        self.assertIn("api repos/x/y/pulls/7 --jq", (self.tmp / "gh-args").read_text())
+
+    def test_reachability_from_the_remote_default_branch_is_a_basis(self):
+        # The work landed on origin/main while the task branch itself was never pushed.
+        path, _ = self.start()
+        self.commit_in(path)
+        head = git(path, "rev-parse", "HEAD")
+        git(self.primary, "push", "-q", "origin", f"{head}:refs/heads/main")
+        r = self.wt("finish", "demo", "task1", "--release")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        rec = self.record()
+        self.assertIn('"released": true', rec)
+        self.assertIn("on origin/main", rec)
+        self.assertIn('"upstream": ""', rec)
+
+    def test_a_stale_remote_tracking_ref_is_not_trusted(self):
+        path, _ = self.start()
+        self.commit_in(path)
+        git(path, "push", "-q", "-u", "origin", "HEAD")
+        self.assertEqual(self.wt("finish", "demo", "task1", "--release").returncode, 0)
+        git(self.remote, "update-ref", "-d", "refs/heads/jp/f/task1")   # gone on origin; the local remote-tracking ref remains
+        self.assertEqual(git(self.primary, "rev-parse", "--verify", "refs/remotes/origin/jp/f/task1"), git(path, "rev-parse", "HEAD"))
+        r = self.wt("check", "demo", "task1", "--for-removal")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("UNPRESERVED", r.stdout)
+
+    def _keep_and_bundle(self, shas: list, name: str = "keeps.bundle") -> Path:
+        for sha in shas:
+            git(self.primary, "update-ref", f"refs/keep/task1-{sha[:7]}", sha)
+        bundle = self.tmp / name
+        git(self.primary, "bundle", "create", str(bundle), *[f"refs/keep/task1-{sha[:7]}" for sha in shas])
+        return bundle
+
+    def test_local_keep_refs_plus_a_restore_tested_bundle_release_unpublished_history(self):
+        path, _ = self.start()
+        self.commit_in(path)
+        self.commit_in(path, "h")
+        sha2 = git(path, "rev-parse", "HEAD")
+        git(path, "reset", "-q", "--hard", "origin/main")   # both commits now live only in the reflog
+        bundle = self._keep_and_bundle([sha2])               # the first commit is an ancestor of sha2
+        r = self.wt("finish", "demo", "task1", "--bundle", str(bundle), "--release")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        rec = self.record()
+        self.assertIn('"released": true', rec)
+        self.assertIn('"preserved_bundle": "%s"' % bundle, rec)
+        self.assertIn('"preserved_bundle_sha256": "', rec)
+        self.assertIn(sha2, rec.split('"preserved_bundle_commits"')[1].split("\n")[0])
+        self.assertIn("refs/keep/task1-%s + bundle" % sha2[:7], rec)
+        self.assertEqual(self.wt("check", "demo", "task1", "--for-removal").returncode, 0)
+
+    def test_a_bundle_missing_a_required_commit_is_incomplete_evidence(self):
+        path, _ = self.start()
+        self.commit_in(path)
+        sha1 = git(path, "rev-parse", "HEAD")
+        git(path, "reset", "-q", "--hard", "origin/main")
+        self.commit_in(path, "h")
+        sha2 = git(path, "rev-parse", "HEAD")                 # sha1 is NOT an ancestor of sha2
+        git(path, "reset", "-q", "--hard", "origin/main")
+        bundle = self._keep_and_bundle([sha2])
+        r = self.wt("finish", "demo", "task1", "--bundle", str(bundle), "--release")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn(sha1, r.stderr)
+        self.assertIn('"released": false', self.record())
+        git(self.primary, "update-ref", f"refs/keep/task1-{sha1[:7]}", sha1)   # a keep ref without the bundle is not enough
+        r = self.wt("finish", "demo", "task1", "--bundle", str(bundle), "--release")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn(sha1, r.stderr)
+
+    def test_changed_evidence_fails_the_validator(self):
+        path, _ = self.start()
+        self.commit_in(path)
+        sha = git(path, "rev-parse", "HEAD")
+        git(path, "reset", "-q", "--hard", "origin/main")
+        bundle = self._keep_and_bundle([sha])
+        self.assertEqual(self.wt("finish", "demo", "task1", "--bundle", str(bundle), "--release").returncode, 0)
+        self.assertEqual(self.wt("check", "demo", "task1", "--for-removal").returncode, 0)
+        self.commit_in(path, "later")                         # new unpublished work after the release
+        later = git(path, "rev-parse", "HEAD")
+        git(path, "reset", "-q", "--hard", "origin/main")
+        r = self.wt("check", "demo", "task1", "--for-removal")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("UNPRESERVED", r.stdout)
+        bundle2 = self._keep_and_bundle([sha, later], "keeps2.bundle")
+        shutil.copy(bundle2, bundle)                          # the recorded file replaced: sha256 no longer matches
+        r = self.wt("check", "demo", "task1", "--for-removal")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("changed since it was recorded", r.stdout)
+        self.assertEqual(self.wt("finish", "demo", "task1", "--bundle", str(bundle), "--release").returncode, 0)
+        self.assertEqual(self.wt("check", "demo", "task1", "--for-removal").returncode, 0)
+
+    def test_the_plan_runs_the_same_validator(self):
+        path, _ = self.start()
+        self.commit_in(path)
+        git(path, "push", "-q", "-u", "origin", "HEAD")
+        r = self.wt("finish", "demo", "task1", "--release")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("check 'demo' 'task1' --for-removal", r.stdout)
+        plan = self._plan_checks(r.stdout)
+        self.assertEqual(subprocess.run(["bash", "-c", plan], capture_output=True, text=True).returncode, 0, plan)
+        self.commit_in(path, "h")
+        git(path, "reset", "-q", "--hard", "origin/jp/f/task1")
+        self.assertNotEqual(subprocess.run(["bash", "-c", plan], capture_output=True, text=True).returncode, 0,
+                            "the plan passed with an unpreserved reflog commit")
+        self.assertTrue(path.exists())
 
     def test_a_later_finish_that_finds_unpreserved_work_withdraws_the_release(self):
         path, _ = self.start()
@@ -270,16 +369,15 @@ class TestListAndFinish(WtFixture):
         rec = self.record()
         self.assertIn('"released": false', rec)
         self.assertIn('"released_at": ""', rec)
-        self.assertIn('"private_reflog_unreachable_at_finish": 1', rec)
+        self.assertIn('"unpreserved_at_finish": 1', rec)
 
-    def test_a_failing_probe_does_not_destroy_the_record(self):
+    def test_an_unreachable_origin_records_nothing_and_keeps_the_record(self):
         path, _ = self.start()
         before = self.record()
-        # A dangling remote-tracking ref makes `rev-list --not --remotes` fail.
-        (self.primary / ".git" / "refs" / "remotes" / "origin" / "broken").write_text("0" * 40 + "\n")
+        git(self.primary, "remote", "set-url", "origin", str(self.tmp / "nowhere.git"))
         r = self.wt("finish", "demo", "task1", "--release")
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("cannot count", r.stderr)
+        self.assertIn("cannot assess preservation", r.stderr)
         self.assertEqual(self.record(), before)
         self.assertEqual(self.wt("list").returncode, 0)
 
@@ -293,7 +391,7 @@ class TestListAndFinish(WtFixture):
         rec_path.write_text("\n".join(l for l in rec_path.read_text().splitlines() if '"primary"' not in l) + "\n")
         r = self.wt("finish", "demo", "task1", "--release")
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("private-reflog", r.stderr)
+        self.assertIn("no preservation basis", r.stderr)
         self.assertIn('"released": false', self.record())
 
     def test_a_never_pushed_branch_records_no_upstream(self):
@@ -302,7 +400,7 @@ class TestListAndFinish(WtFixture):
         r = self.wt("finish", "demo", "task1")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('"upstream": ""', self.record())
-        self.assertIn('"unpushed_at_finish": 1', self.record())
+        self.assertIn('"unpreserved_at_finish": 1', self.record())
 
     def test_the_worktree_root_may_not_be_the_primaries_directory(self):
         env = dict(os.environ, AI_SCRATCH_CONFIG_DIR=str(self.cfg), WT_ROOT=str(self.primaries),
