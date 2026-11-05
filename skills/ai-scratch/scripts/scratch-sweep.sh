@@ -66,6 +66,7 @@ PROTECT_EXTRA="$(scratch_config_get AI_SCRATCH_PROTECT)"
 # explicit `scratch-setup.sh --release`. Name-by-name pins (AI_SCRATCH_PROTECT)
 # cannot cover an entry that did not exist when the pin was written; a hold can.
 HOLD="$(scratch_config_get AI_SCRATCH_HOLD)"
+OWNERS_DIR="$(scratch_config_get AI_SCRATCH_OWNERS)"; OWNERS_DIR="${OWNERS_DIR:-${HOME:-/nonexistent}/devel/worktrees/.owners}"
 # Fail fast: an apply under a hold must not even enumerate the root, let alone
 # run git in every entry, before refusing.
 if [ "$APPLY" = 1 ] && [ -n "$HOLD" ]; then
@@ -89,28 +90,36 @@ classify() {  # <abs-path> <base-name>
     printf 'pinned by AI_SCRATCH_PROTECT'; return 0
   fi
 
-  # Object dependencies are invisible to a per-entry view. A repository that
-  # LENDS objects through another repository's objects/info/alternates is the
-  # only copy of those objects for that borrower; deleting the lender breaks the
-  # borrower even when the lender itself is clean, pushed and idle (this is how
-  # ai-usage-16 was removed from under ai-usage-17 on 2026-11-03). The lender
-  # index is built once per run from every alternates file under the root and
-  # its neighbours (see below); a candidate is kept when any borrower's
-  # alternates path resolves inside it.
-  if [ -s "$LENDERS" ]; then
-    local real; real="$(scratch_canonical "$path" 2>/dev/null)" || real="$path"
-    if grep -qF -- "$real/" "$LENDERS" || grep -qxF -- "$real" "$LENDERS"; then
-      printf 'lends objects to another repository (alternates)'; return 0
-    fi
+  # Fail closed when the dependency evidence could not be gathered.
+  [ "$SCAN_FAILED" = 0 ] || { printf 'dependency scan failed (fail closed)'; return 0; }
+
+  # Another repository depends on this entry: it lends objects through
+  # objects/info/alternates (directly or down a chain), it is the primary of a
+  # linked worktree, or the environment names its objects. Deleting it would
+  # break that other repository however clean, pushed and idle this one is
+  # (this is how ai-usage-16 was removed from under ai-usage-17 on 2026-11-03).
+  local real; real="$(scratch_canonical "$path" 2>/dev/null)" || real="$path"
+  if grep -qxF -- "$real" "$LENDERS" || grep -qF -- "$real/" "$LENDERS"; then
+    printf 'another repository depends on it (lender or worktree primary)'; return 0
   fi
-  # A primary that hosts a linked worktree OUTSIDE the candidate is likewise a
-  # dependency: the worktree's .git file points into this entry's .git/worktrees.
+  # The same check from the host's side, for worktrees the scan did not reach.
   if [ -d "$path/.git/worktrees" ]; then
     local gd
     for gd in "$path"/.git/worktrees/*/gitdir; do
       [ -f "$gd" ] || continue
       case "$(cat "$gd" 2>/dev/null)" in "$path"/*) ;; *) printf 'hosts a linked worktree outside itself'; return 0;; esac
     done
+  fi
+  # An ownership record (AI_SCRATCH_OWNERS, default ~/devel/worktrees/.owners)
+  # that names this entry and is not released means retain. Entries without a
+  # record fall through to the ordinary rules; a record is the only way to say
+  # "mine, not done" without touching the entry.
+  if [ -n "$OWNERS_DIR" ] && [ -d "$OWNERS_DIR" ]; then
+    local rec
+    rec="$(grep -rlF -- "\"$real\"" "$OWNERS_DIR" 2>/dev/null | head -1)"
+    if [ -n "$rec" ] && ! grep -qE '"released":[[:space:]]*true' "$rec" 2>/dev/null; then
+      printf 'owner record not released (%s)' "${rec##*/}"; return 0
+    fi
   fi
 
   [ -L "$path" ] && { printf 'symlink'; return 0; }
@@ -192,34 +201,70 @@ trap 'rm -rf "$WORK"' EXIT
 : >"$WORK/candidates"   # hex-name<TAB>devino<TAB>kb
 : >"$WORK/keeps"        # reason<TAB>kb
 
-# Lender index: every alternates target that any repository near the root
-# declares, as canonical paths. Relative entries are resolved against the
-# borrower's objects directory, as git does. Searched: the root and its parent
-# (where the operator's primaries normally live), plus any directories named in
-# AI_SCRATCH_LENDER_SCAN (space-separated), with build trees pruned. The scan is
-# bounded on purpose: it runs on every sweep, so it must stay cheap.
-# TODO: -maxdepth 6 from the root's parent indexes borrowers at most one
-# directory below a root entry, and the prune list matches any directory named
-# node_modules/.build/target/dist, repository or not. Deeper or oddly named
-# borrowers are not indexed; widen with AI_SCRATCH_LENDER_SCAN until this is
-# replaced by a per-entry search.
+# Dependency index, built once per run and fail-closed.
+#
+# A per-entry view cannot see that deleting X breaks Y. Three kinds of
+# dependency are indexed as canonical paths of the repository that must stay:
+#   1. objects/info/alternates targets (object lenders), relative entries
+#      resolved against the borrower's objects directory as git does, symlinks
+#      resolved, and chains followed transitively because every repository's
+#      alternates file is read, including a lender's own;
+#   2. the primary of every linked worktree found (the `gitdir:` pointer in a
+#      .git FILE): deleting the primary strands the worktree;
+#   3. object directories named by GIT_ALTERNATE_OBJECT_DIRECTORIES in this
+#      environment, which git consults exactly like an alternates file.
+# Searched at full depth: the root and every directory in AI_SCRATCH_LENDER_SCAN
+# (space-separated). Searched to depth 4: the root's parent, where primaries
+# normally sit. Dependencies declared from anywhere else are not seen: name that
+# place in AI_SCRATCH_LENDER_SCAN. A scan that fails, or an alternates file that
+# cannot be read, marks the whole run unsafe: every entry is kept and --apply
+# refuses, because the absent evidence is exactly what would be needed.
 LENDERS="$WORK/lenders"; : >"$LENDERS"
+DEPS_ERR="$WORK/deps.err"; : >"$DEPS_ERR"
+SCAN_FAILED=0
 scan_parent="$(dirname -- "$ROOT_REAL")"
-# shellcheck disable=SC2046
-find "$ROOT_REAL" "$scan_parent" $(scratch_config_get AI_SCRATCH_LENDER_SCAN) -maxdepth 6 \
-     \( -name node_modules -o -name .build -o -name target -o -name dist \) -prune -o \
-     -type f -path '*/objects/info/alternates' -print0 2>/dev/null \
-  | while IFS= read -r -d '' alt; do
-      objdir="$(dirname -- "$(dirname -- "$(dirname -- "$alt")")")"
-      while IFS= read -r line; do
-        [ -n "$line" ] || continue
-        case "$line" in /*) target="$line";; *) target="$objdir/$line";; esac
-        # The lender ROOT is the repository (or .git) directory holding objects/.
-        target="${target%/}"; target="${target%/objects}"; target="${target%/.git}"
-        resolved="$(scratch_canonical "$target" 2>/dev/null)" || resolved="$target"
-        printf '%s\n' "$resolved"
-      done <"$alt"
-    done | sort -u >"$LENDERS"
+dep_record() {  # <path> : strip objects/.git suffixes, canonicalize, append
+  local t="${1%/}"; t="${t%/objects}"; t="${t%/.git}"
+  local r; r="$(scratch_canonical "$t" 2>/dev/null)" || r="$t"
+  printf '%s\n' "$r" >>"$LENDERS"
+}
+{
+  # shellcheck disable=SC2046
+  find "$ROOT_REAL" $(scratch_config_get AI_SCRATCH_LENDER_SCAN) \
+       \( -type f -path '*/objects/info/alternates' -o -type f -name .git \) -print0 2>>"$DEPS_ERR"
+  find "$scan_parent" -maxdepth 4 \
+       \( -type f -path '*/objects/info/alternates' -o -type f -name .git \) -print0 2>>"$DEPS_ERR"
+} | while IFS= read -r -d '' f; do
+  case "$f" in
+    */objects/info/alternates)
+      [ -r "$f" ] || { printf 'unreadable: %s\n' "$f" >>"$DEPS_ERR"; continue; }
+      objdir="$(dirname -- "$(dirname -- "$f")")"
+      while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|'#'*) continue;; /*) target="$line";; *) target="$objdir/$line";; esac
+        dep_record "$target"
+      done <"$f" || printf 'read error: %s\n' "$f" >>"$DEPS_ERR"
+      ;;
+    */.git)
+      [ -r "$f" ] || { printf 'unreadable: %s\n' "$f" >>"$DEPS_ERR"; continue; }
+      gd="$(sed -n 's/^gitdir:[[:space:]]*//p' "$f" | head -1)"
+      [ -n "$gd" ] || continue
+      case "$gd" in /*) ;; *) gd="$(dirname -- "$f")/$gd";; esac
+      # <primary>/.git/worktrees/<name> -> <primary>
+      case "$gd" in */.git/worktrees/*) dep_record "${gd%/.git/worktrees/*}";; *) dep_record "$gd";; esac
+      ;;
+  esac
+done
+if [ -n "${GIT_ALTERNATE_OBJECT_DIRECTORIES:-}" ]; then
+  IFS=: read -r -a _envalts <<<"$GIT_ALTERNATE_OBJECT_DIRECTORIES"
+  for a in "${_envalts[@]}"; do [ -n "$a" ] && dep_record "$a"; done
+fi
+sort -u -o "$LENDERS" "$LENDERS"
+if [ -s "$DEPS_ERR" ]; then
+  SCAN_FAILED=1
+  printf 'WARNING: dependency scan incomplete; every entry will be kept and --apply refused:\n' >&2
+  head -5 "$DEPS_ERR" >&2
+fi
+DEPS_DIGEST="$(scratch_sha256 "$LENDERS")"
 
 # NUL-delimited enumeration: no filename can split a record.
 while IFS= read -r -d '' path; do
@@ -263,6 +308,7 @@ if [ "$APPLY" != 1 ]; then
     printf 'root\t%s\n' "$(scratch_hex_encode "$ROOT_REAL")"
     printf 'rootid\t%s\n' "$ROOT_ID"
     printf 'idle\t%s\n' "$OLDER_THAN"
+    printf 'deps\t%s\n' "$DEPS_DIGEST"
     sort "$WORK/candidates" | sed 's/^/candidate\t/'
   } >"$OUT_MANIFEST"
   printf 'sum\t%s\n' "$(scratch_sha256 "$OUT_MANIFEST")" >>"$OUT_MANIFEST"
@@ -291,6 +337,10 @@ bad="$(scratch_manifest_bad_records "$body")"
 find "$WORK" -maxdepth 0 -newercm "$WORK" >/dev/null 2>&1 \
   || scratch_die "this system's find does not support -newercm, which the removal boundary requires"
 
+[ "$SCAN_FAILED" = 0 ] || scratch_die "dependency scan failed; refusing to apply (see warnings above)"
+m_deps="$(sed -n 's/^deps\t//p' "$MANIFEST" | tail -1)"
+[ -n "$m_deps" ] || scratch_die "manifest carries no dependency digest; re-run the dry run with this version"
+[ "$m_deps" = "$DEPS_DIGEST" ] || scratch_die "dependency evidence changed since the dry run (a repository started or stopped lending objects, or a worktree was added); re-run the dry run and review again"
 m_rootid="$(sed -n 's/^rootid\t//p' "$MANIFEST" | tail -1)"
 # dev:inode only: the root's ctime moves whenever anything is created or removed
 # inside it, which is exactly what a sweep does.

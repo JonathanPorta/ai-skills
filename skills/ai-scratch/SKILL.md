@@ -137,12 +137,22 @@ reviewable, a bespoke exclusion is not.
   manifest, in every session that shares the config. Name pins (`--protect`) only cover entries that
   existed when they were written; a hold covers entries created afterwards. `--release` lifts it. Use a
   hold whenever a recovery, migration or audit is in progress.
-- **Lenders are never reclaimable.** The sweep indexes every `objects/info/alternates` under the root,
-  its parent, and `AI_SCRATCH_LENDER_SCAN`, and keeps any entry that another repository borrows objects
-  from, however clean, pushed and idle it is. A primary that hosts a linked worktree outside itself is
-  kept for the same reason. Do not create new clones that borrow from a disposable repository
-  (`git clone --shared`, `--reference` without `--dissociate`): a borrower is only as durable as its lender,
-  and a borrower of a blob-less partial clone cannot even pass `fsck`.
+- **Dependencies are never reclaimable.** Before classifying, the sweep builds a dependency index:
+  every `objects/info/alternates` target (relative paths resolved against the borrower's objects
+  directory, symlinks resolved, chains followed because every repository's own alternates file is read),
+  the primary of every linked worktree it finds (the `gitdir:` pointer), and anything named by
+  `GIT_ALTERNATE_OBJECT_DIRECTORIES`. An entry that appears in the index is kept however clean, pushed and
+  idle it is, and so is an entry whose `.git/worktrees` points outside itself. **Coverage:** the root at
+  full depth, the root's parent to depth 4, and every directory in `AI_SCRATCH_LENDER_SCAN`; a dependency
+  declared anywhere else is not seen, so name that place in `AI_SCRATCH_LENDER_SCAN`. If the scan fails or
+  an alternates file cannot be read, every entry is kept and `--apply` refuses. The dry-run manifest
+  records a digest of the index; `--apply` rebuilds it and refuses when it differs, so a borrower created
+  between review and apply blocks the apply. Do not create new clones that borrow from a disposable
+  repository (`git clone --shared`, `--reference` without `--dissociate`): a borrower is only as durable as
+  its lender, and a borrower of a blob-less partial clone cannot even pass `fsck`.
+- **Ownership records.** `AI_SCRATCH_OWNERS` (default `~/devel/worktrees/.owners`) holds JSON records that
+  name a worktree path; an entry whose record is not `"released": true` is kept. Entries with no record
+  rely on the ordinary rules (clean, pushed, idle, no dependency, not pinned, not held).
 - **Idle is a filter, not an authorization.** The idle window selects what is examined; only the keep
   rules (clean, pushed, no lender, no host, not pinned, not held) decide what is reclaimable.
 - **Source layout.** Human checkouts stay under `~/devel/portaj/<repo>`. Agent task worktrees go under

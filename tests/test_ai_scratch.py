@@ -967,7 +967,7 @@ class TestHoldAndDependencyGuards(ScratchFixture):
         self.assertTrue((borrower / ".git" / "objects" / "info" / "alternates").exists())
         backdate(self.root)
         out = self.sweep("--verbose").stdout
-        self.assertRegex(out, r"KEEP\s+lender\s.*lends objects to another repository")
+        self.assertRegex(out, r"KEEP\s+lender\s.*another repository depends on it")
         self.assertNotRegex(out, r"FREE\s+lender\b")
 
     def test_lender_outside_the_root_does_not_pin_root_entries(self):
@@ -992,3 +992,149 @@ class TestHoldAndDependencyGuards(ScratchFixture):
         out = self.sweep("--verbose", "--older-than", "1").stdout
         self.assertRegex(out, r"KEEP\s+idle-but-unpushed\s.*unpushed commits")
         self.assertNotRegex(out, r"FREE\s+idle-but-unpushed\b")
+
+
+class TestDependencyCoverage(ScratchFixture):
+    """Every way one repository can depend on another's objects or metadata keeps the dependency."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.cfg = tempfile.mkdtemp(prefix="scratch-cfg-deps-")
+        self.env = {"AI_SCRATCH_CONFIG_DIR": self.cfg}
+
+    def pushed(self, where: Path, name: str) -> Path:
+        remote = self.tmp / f"{name}.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+        src = self.tmp / f"{name}-src"
+        new_repo(src)
+        git(src, "remote", "add", "origin", str(remote))
+        git(src, "push", "-q", "origin", "HEAD:main")
+        clone = where / name
+        subprocess.run(["git", "clone", "-q", str(remote), str(clone)], check=True, capture_output=True)
+        return clone
+
+    def shared(self, lender: Path, where: Path) -> Path:
+        subprocess.run(["git", "clone", "-q", "--shared", str(lender), str(where)], check=True, capture_output=True)
+        return where
+
+    def sweep_env(self, *args: str):
+        return run(SWEEP, "--root", str(self.root), *args, env_extra=self.env)
+
+    def test_nested_borrower_deep_inside_a_root_entry_keeps_the_lender(self):
+        lender = self.pushed(self.root, "lender")
+        self.shared(lender, self.root / "task" / "sub" / "deeper" / "borrower")
+        backdate(self.root)
+        out = self.sweep_env("--verbose").stdout
+        self.assertRegex(out, r"KEEP\s+lender\s.*another repository depends on it")
+
+    def test_chained_lenders_are_all_kept(self):
+        a = self.pushed(self.root, "a")
+        b = self.shared(a, self.root / "b")
+        self.shared(b, self.root / "c")
+        backdate(self.root)
+        out = self.sweep_env("--verbose").stdout
+        self.assertRegex(out, r"KEEP\s+a\s.*another repository depends on it")
+        self.assertRegex(out, r"KEEP\s+b\s.*another repository depends on it")
+
+    def test_relative_alternates_path_is_resolved(self):
+        lender = self.pushed(self.root, "lender")
+        borrower = self.pushed(self.root, "borrower")
+        (borrower / ".git" / "objects" / "info" / "alternates").write_text("../../../lender/.git/objects\n")
+        backdate(self.root)
+        out = self.sweep_env("--verbose").stdout
+        self.assertRegex(out, r"KEEP\s+lender\s.*another repository depends on it")
+
+    def test_alternates_through_a_symlink_resolves_to_the_real_lender(self):
+        lender = self.pushed(self.root, "lender")
+        link = self.tmp / "link-to-lender"
+        link.symlink_to(lender)
+        borrower = self.pushed(self.root, "borrower")
+        (borrower / ".git" / "objects" / "info" / "alternates").write_text(f"{link}/.git/objects\n")
+        backdate(self.root)
+        out = self.sweep_env("--verbose").stdout
+        self.assertRegex(out, r"KEEP\s+lender\s.*another repository depends on it")
+
+    def test_borrower_outside_the_root_is_seen_only_where_the_scan_is_told_to_look(self):
+        lender = self.pushed(self.root, "lender")
+        outside = self.tmp / "far" / "away"
+        outside.mkdir(parents=True)
+        self.shared(lender, outside / "borrower")
+        backdate(self.root)
+        self.assertRegex(self.sweep_env().stdout, r"FREE\s+lender\b")  # documented limit
+        (Path(self.cfg) / "config").write_text(f"AI_SCRATCH_LENDER_SCAN = {outside}\n")
+        self.assertRegex(self.sweep_env("--verbose").stdout, r"KEEP\s+lender\s.*another repository depends on it")
+
+    def test_worktree_outside_the_root_keeps_its_primary(self):
+        primary = self.pushed(self.root, "primary")
+        outside = self.tmp / "wt-home"
+        outside.mkdir()
+        git(primary, "worktree", "add", "-q", "--detach", str(outside / "wt"))
+        backdate(self.root)
+        out = self.sweep_env("--verbose").stdout
+        self.assertRegex(out, r"KEEP\s+primary\s.*(another repository depends on it|hosts a linked worktree)")
+
+    def test_environment_alternates_keep_the_named_repository(self):
+        lender = self.pushed(self.root, "lender")
+        backdate(self.root)
+        env = dict(self.env, GIT_ALTERNATE_OBJECT_DIRECTORIES=str(lender / ".git" / "objects"))
+        out = run(SWEEP, "--root", str(self.root), "--verbose", env_extra=env).stdout
+        self.assertRegex(out, r"KEEP\s+lender\s.*another repository depends on it")
+
+    def test_unreadable_alternates_file_keeps_everything_and_refuses_apply(self):
+        lender = self.pushed(self.root, "lender")
+        borrower = self.shared(lender, self.root / "borrower")
+        (self.root / "plain").mkdir()
+        backdate(self.root)
+        alt = borrower / ".git" / "objects" / "info" / "alternates"
+        self.addCleanup(subprocess.run, ["chmod", "u+r", str(alt)], capture_output=True)
+        subprocess.run(["chmod", "000", str(alt)], check=True)
+        dry = self.sweep_env("--verbose")
+        self.assertIn("dependency scan incomplete", dry.stderr)
+        self.assertRegex(dry.stdout, r"KEEP\s+plain\s.*dependency scan failed")
+        self.assertNotIn("FREE", dry.stdout)
+        subprocess.run(["chmod", "u+r", str(alt)], check=True)
+        manifest = re.search(r"--manifest (\S+)", self.sweep_env().stdout).group(1)
+        subprocess.run(["chmod", "000", str(alt)], check=True)
+        result = self.sweep_env("--apply", "--manifest", manifest)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("dependency scan failed", result.stderr)
+        self.assertTrue((self.root / "plain").exists())
+
+    def test_new_borrower_between_dry_run_and_apply_aborts(self):
+        lender = self.pushed(self.root, "lender")
+        (self.root / "plain").mkdir()
+        backdate(self.root)
+        manifest = re.search(r"--manifest (\S+)", self.sweep_env().stdout).group(1)
+        self.shared(lender, self.tmp / "late-borrower")
+        (Path(self.cfg) / "config").write_text(f"AI_SCRATCH_LENDER_SCAN = {self.tmp / 'late-borrower'}\n")
+        result = self.sweep_env("--apply", "--manifest", manifest)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("dependency evidence changed", result.stderr)
+        self.assertTrue((self.root / "plain").exists())
+        self.assertTrue(lender.exists())
+
+    def test_manifest_without_a_dependency_digest_is_refused(self):
+        (self.root / "plain").mkdir()
+        backdate(self.root)
+        manifest = re.search(r"--manifest (\S+)", self.sweep_env().stdout).group(1)
+        body = [l for l in Path(manifest).read_text().splitlines() if not l.startswith("deps\t") and not l.startswith("sum\t")]
+        tmp = Path(manifest + ".stripped")
+        tmp.write_text("\n".join(body) + "\n")
+        digest = subprocess.run(["shasum", "-a", "256", str(tmp)], capture_output=True, text=True).stdout.split()[0]
+        tmp.write_text("\n".join(body) + f"\nsum\t{digest}\n")
+        result = self.sweep_env("--apply", "--manifest", str(tmp))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no dependency digest", result.stderr)
+        self.assertTrue((self.root / "plain").exists())
+
+    def test_unreleased_owner_record_keeps_the_entry(self):
+        repo = self.pushed(self.root, "owned")
+        backdate(self.root)
+        owners = Path(self.cfg) / "owners" / "repo"
+        owners.mkdir(parents=True)
+        real = subprocess.run(["bash", "-c", f'cd "{repo}" && pwd -P'], capture_output=True, text=True).stdout.strip()
+        (Path(self.cfg) / "config").write_text(f"AI_SCRATCH_OWNERS = {Path(self.cfg) / 'owners'}\n")
+        (owners / "owned.json").write_text(f'{{"worktree": "{real}", "complete": true, "released": false}}\n')
+        self.assertRegex(self.sweep_env("--verbose").stdout, r"KEEP\s+owned\s.*owner record not released")
+        (owners / "owned.json").write_text(f'{{"worktree": "{real}", "complete": true, "released": true}}\n')
+        self.assertRegex(self.sweep_env().stdout, r"FREE\s+owned\b")
