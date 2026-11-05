@@ -343,6 +343,36 @@ class TestListAndFinish(WtFixture):
         self.assertNotEqual(r.returncode, 0)
         self.assertFalse((self.tmp / "relative").exists())
 
+    def _plan_checks(self, stdout: str) -> str:
+        """The printed plan minus comments and the removal line, runnable under set -e."""
+        lines = [l for l in stdout.splitlines() if l and not l.startswith("#") and "worktree remove" not in l
+                 and not l.startswith("recorded") and not l.startswith("  ")]
+        return "set -e\n" + "\n".join(lines) + "\n"
+
+    def test_the_printed_plan_runs_and_stops_on_a_lock_or_a_quote_in_the_branch(self):
+        path, _ = self.start("quoted", "--branch", "jp/f/it's")
+        self.commit_in(path)
+        git(path, "push", "-q", "-u", "origin", "HEAD")
+        r = self.wt("finish", "demo", "quoted", "--release")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        plan = self._plan_checks(r.stdout)
+        self.assertEqual(subprocess.run(["bash", "-c", plan], capture_output=True, text=True).returncode, 0, plan)
+        git(self.primary, "worktree", "lock", "--reason", "in use", str(path))
+        self.assertNotEqual(subprocess.run(["bash", "-c", plan], capture_output=True, text=True).returncode, 0,
+                            "a locked worktree passed the plan's first check")
+        git(self.primary, "worktree", "unlock", str(path))
+        self.assertTrue(path.exists())
+
+    def test_a_plain_finish_after_a_release_withdraws_it_and_says_so(self):
+        path, _ = self.start()
+        self.commit_in(path)
+        git(path, "push", "-q", "-u", "origin", "HEAD")
+        self.assertEqual(self.wt("finish", "demo", "task1", "--release").returncode, 0)
+        r = self.wt("finish", "demo", "task1", "--note", "again")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("WITHDRAWN", r.stderr)
+        self.assertIn('"released": false', self.record())
+
     def test_the_sweep_consumes_the_records_wt_writes(self):
         done, _ = self.start("done")
         self.commit_in(done)

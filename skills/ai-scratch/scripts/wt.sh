@@ -277,7 +277,7 @@ cmd_finish() {
   adm="$(g -C "$wt" rev-parse --absolute-git-dir 2>/dev/null)" || adm=""
   [ -n "$primary" ] || primary="$(g -C "$wt" rev-parse --git-common-dir 2>/dev/null)"; primary="${primary%/.git}"
   # A rev-list that fails counts the commit as unreachable: an error is not evidence.
-  unreachable() { local out; out="$(g -C "$primary" rev-list --max-count=1 "$1" --not --remotes 2>/dev/null)" || return 0; [ -n "$out" ]; }
+  unreachable() { local out; out="$(g -C "$wt" rev-list --max-count=1 "$1" --not --remotes 2>/dev/null)" || return 0; [ -n "$out" ]; }
   if [ -n "$adm" ] && [ -f "$adm/logs/HEAD" ]; then
     for s in $(cut -d' ' -f2 "$adm/logs/HEAD" | sort -u); do unreachable "$s" && reflog_unreach=$((reflog_unreach + 1)); done
   fi
@@ -303,7 +303,7 @@ cmd_finish() {
       reflog_unreach=0
       for s in $(cut -d' ' -f2 "$adm/logs/HEAD" | sort -u); do
         unreachable "$s" || continue
-        g -C "$primary" merge-base --is-ancestor "$s" "$pr_head" 2>/dev/null || reflog_unreach=$((reflog_unreach + 1))
+        g -C "$wt" merge-base --is-ancestor "$s" "$pr_head" 2>/dev/null || reflog_unreach=$((reflog_unreach + 1))
       done
     fi
   fi
@@ -326,7 +326,7 @@ cmd_finish() {
   local blockers=""
   [ "$dirty" = 0 ] || blockers="$blockers${blockers:+; }$dirty uncommitted change(s)"
   [ "${unpushed:-1}" = 0 ] || blockers="$blockers${blockers:+; }$unpushed commit(s) on no remote"
-  [ "$reflog_unreach" = 0 ] || blockers="$blockers${blockers:+; }$reflog_unreach private-reflog commit(s) reachable from no remote (give them a ref or bundle first)"
+  [ "$reflog_unreach" = 0 ] || blockers="$blockers${blockers:+; }$reflog_unreach private-reflog commit(s) reachable from no remote (push or bundle them, or expire that reflog entry by hand if the object is gone)"
   [ -n "$upstream" ] || [ "$merged_here" = 1 ] || blockers="$blockers${blockers:+; }no upstream branch (push it, or record the merged PR)"
   # Every finish states released explicitly: a stale "released": true from an
   # earlier run must never survive a later finish that found unpreserved work.
@@ -337,9 +337,14 @@ cmd_finish() {
     printf 'released\tbool\tfalse\n' >>"$WT_TMP/ov"
     printf 'released_at\tstring\t\n' >>"$WT_TMP/ov"
   fi
+  local was_released=0; [ "$REC_STATUS" = released ] && was_released=1
   if [ "$release" = 1 ] && [ -n "$blockers" ]; then
     update_record "$REC" "$WT_TMP/ov"
+    [ "$was_released" = 1 ] && printf 'wt: the earlier release of %s/%s is WITHDRAWN\n' "$repo" "$task" >&2
     die "recorded completion, but NOT released: $blockers. Fix those and run finish --release again."
+  fi
+  if [ "$release" != 1 ] && [ "$was_released" = 1 ]; then
+    printf 'wt: the earlier release of %s/%s is WITHDRAWN (every finish states the release afresh; run finish --release again)\n' "$repo" "$task" >&2
   fi
   update_record "$REC" "$WT_TMP/ov"
   printf 'recorded %s for %s/%s (record %s)\n' "$([ "$release" = 1 ] && printf 'completion + release' || printf 'completion')" "$repo" "$task" "$REC"
@@ -348,13 +353,15 @@ cmd_finish() {
   local q_wt q_rec q_primary; q_wt="$(shq "$wt")"; q_rec="$(shq "$REC")"; q_primary="$(shq "${primary:-<primary>}")"
   printf '\n# Cleanup plan for %s (NOTHING below was executed; wt never deletes)\n' "$wt"
   printf '# Re-check seconds before removal, in this order, and stop on the first failure:\n'
-  printf 'git -C %s worktree list --porcelain | grep -A3 -xF "worktree $(printf %%s %s)" | grep -q . && ! git -C %s worktree list --porcelain | grep -A3 -xF "worktree $(printf %%s %s)" | grep -qx locked   # registered, not locked\n' "$q_primary" "$q_wt" "$q_primary" "$q_wt"
+  # Plain [ ] tests only: a line starting with "!" is exempt from set -e, so a
+  # plan run under set -e would not stop on it.
+  printf 'wt_entry="$(git -C %s worktree list --porcelain | grep -A3 -xF "worktree $(printf %%s %s)")"; [ -n "$wt_entry" ] && [ -z "$(printf %%s "$wt_entry" | grep "^locked")" ]   # registered, not locked\n' "$q_primary" "$q_wt"
   printf '[ -z "$(git -C %s status --porcelain)" ]   # clean\n' "$q_wt"
   if [ "$merged_here" = 1 ]; then
     printf 'git -C %s fetch origin "+refs/pull/%s/head:refs/remotes/origin/pull/%s/head"   # the merged PR head, so the next check (and the sweep) can see the commits are on a remote\n' "$q_primary" "$pr_num" "$pr_num"
   fi
   printf '[ "$(git -C %s rev-list --count HEAD --not --remotes)" = 0 ]   # every commit on a remote\n' "$q_wt"
-  printf '[ ! -d %s ] && ! grep -lsxF -e %s %s/*/.git/objects/info/alternates   # hosts nothing, lends nothing\n' "$(shq "$wt/.git/worktrees")" "$(shq "$wt/.git/objects")" "$(shq "$WT_PRIMARIES")"
+  printf '[ ! -d %s ] && [ -z "$(grep -lsxF -e %s -e %s %s/*/.git/objects/info/alternates)" ]   # hosts nothing, lends nothing\n' "$(shq "$wt/.git/worktrees")" "$(shq "$wt/.git/objects")" "$(shq "$wt/.git/objects/")" "$(shq "$WT_PRIMARIES")"
   printf 'grep -q %s %s   # the owner has released it\n' "$(shq '"released": true')" "$q_rec"
   printf '# then, and only then, the non-forced removal (never --force, never prune, never gc):\n'
   printf 'git -C %s worktree remove %s\n' "$q_primary" "$q_wt"
