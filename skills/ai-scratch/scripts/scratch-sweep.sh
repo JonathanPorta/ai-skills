@@ -102,7 +102,12 @@ classify() {  # <abs-path> <base-name>
   # environment: a grep -F pattern containing a newline would split into two
   # patterns, and the second ("/" or "") matches every line.
   local real; real="$(scratch_canonical "$path" 2>/dev/null)" || real="$path"
-  if REAL="$real" awk 'BEGIN{r=ENVIRON["REAL"]} $0==r || index($0, r "/")==1 {f=1; exit} END{exit !f}' "$LENDERS"; then
+  # A dependent that lives inside the entry itself (a submodule, a worktree the
+  # entry hosts within itself, a lender/borrower pair in one task directory)
+  # goes away with the entry and does not pin it.
+  if REAL="$real" awk -F '\t' 'BEGIN{r=ENVIRON["REAL"]}
+       { l=$1; d=$2; lin=(l==r || index(l, r "/")==1); din=(d==r || index(d, r "/")==1); if (lin && !din) {f=1; exit} }
+       END{exit !f}' "$LENDERS"; then
     printf 'another repository depends on it (lender or worktree primary)'; return 0
   fi
   # The same check from the host's side, for worktrees the scan did not reach.
@@ -219,8 +224,9 @@ trap 'rm -rf "$WORK"' EXIT
 #   3. object directories named by GIT_ALTERNATE_OBJECT_DIRECTORIES in this
 #      environment, which git consults exactly like an alternates file.
 # Searched at full depth: the root and every directory in AI_SCRATCH_LENDER_SCAN
-# (space-separated). Searched to depth 4: the root's parent, where primaries
-# normally sit. Dependencies declared from anywhere else are not seen: name that
+# (space-separated). Searched to depth 5: the root's parent, so that a sibling
+# clone's objects/info/alternates (parent/<repo>/.git/objects/info/alternates)
+# is seen. Dependencies declared from anywhere else are not seen: name that
 # place in AI_SCRATCH_LENDER_SCAN. A scan that fails, or an alternates file that
 # cannot be read, marks the whole run unsafe: every entry is kept and --apply
 # refuses, because the absent evidence is exactly what would be needed.
@@ -228,26 +234,29 @@ LENDERS="$WORK/lenders"; : >"$LENDERS"
 DEPS_ERR="$WORK/deps.err"; : >"$DEPS_ERR"
 SCAN_FAILED=0
 scan_parent="$(dirname -- "$ROOT_REAL")"
-dep_record() {  # <path> : strip objects/.git suffixes, canonicalize, append
+dep_record() {  # <lender-path> <dependent-path> : canonicalize both, append "lender<TAB>dependent"
   local t="${1%/}"; t="${t%/objects}"; t="${t%/.git}"
   local r; r="$(scratch_canonical "$t" 2>/dev/null)" || r="$t"
-  printf '%s\n' "$r" >>"$LENDERS"
+  local d="${2%/}"; d="${d%/.git}"
+  local rd; rd="$(scratch_canonical "$d" 2>/dev/null)" || rd="$d"
+  printf '%s\t%s\n' "$r" "$rd" >>"$LENDERS"
 }
 {
   # shellcheck disable=SC2046
   find "$ROOT_REAL" $(scratch_config_get AI_SCRATCH_LENDER_SCAN) \
        \( -type f -path '*/objects/info/alternates' -o -type f -name .git \) -print0 2>>"$DEPS_ERR"
-  find "$scan_parent" -maxdepth 4 \
+  find "$scan_parent" -maxdepth 5 \
        \( -type f -path '*/objects/info/alternates' -o -type f -name .git \) -print0 2>>"$DEPS_ERR"
 } | while IFS= read -r -d '' f; do
   case "$f" in
     */objects/info/alternates)
       [ -r "$f" ] || { printf 'unreadable: %s\n' "$f" >>"$DEPS_ERR"; continue; }
       objdir="$(dirname -- "$(dirname -- "$f")")"
+      borrower="$(dirname -- "$objdir")"   # <repo>/.git or a bare repo
       while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in ''|'#'*) continue;; /*) target="$line";; *) target="$objdir/$line";; esac
-        dep_record "$target"
-      done <"$f" || printf 'read error: %s\n' "$f" >>"$DEPS_ERR"
+        dep_record "$target" "$borrower"
+      done <"$f"
       ;;
     */.git)
       [ -r "$f" ] || { printf 'unreadable: %s\n' "$f" >>"$DEPS_ERR"; continue; }
@@ -255,15 +264,16 @@ dep_record() {  # <path> : strip objects/.git suffixes, canonicalize, append
       [ -n "$gd" ] || continue
       case "$gd" in /*) ;; *) gd="$(dirname -- "$f")/$gd";; esac
       # <primary>/.git/worktrees/<name> -> <primary>
-      case "$gd" in */.git/worktrees/*) dep_record "${gd%/.git/worktrees/*}";; *) dep_record "$gd";; esac
+      wtdir="$(dirname -- "$f")"
+      case "$gd" in */.git/worktrees/*) dep_record "${gd%/.git/worktrees/*}" "$wtdir";; *) dep_record "$gd" "$wtdir";; esac
       ;;
   esac
 done
 if [ -n "${GIT_ALTERNATE_OBJECT_DIRECTORIES:-}" ]; then
   IFS=: read -r -a _envalts <<<"$GIT_ALTERNATE_OBJECT_DIRECTORIES"
-  for a in "${_envalts[@]}"; do [ -n "$a" ] && dep_record "$a"; done
+  for a in "${_envalts[@]}"; do [ -n "$a" ] && dep_record "$a" "(environment)"; done
 fi
-sort -u -o "$LENDERS" "$LENDERS"
+LC_ALL=C sort -u -o "$LENDERS" "$LENDERS"
 if [ -s "$DEPS_ERR" ]; then
   SCAN_FAILED=1
   printf 'WARNING: dependency scan incomplete; every entry will be kept and --apply refused:\n' >&2

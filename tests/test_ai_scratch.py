@@ -8,6 +8,7 @@ scripts against disposable fixtures.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -911,8 +912,6 @@ class TestTheBoundaryFailsClosed(ScratchFixture):
         self.assertEqual(result.returncode, 0, result.stdout)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestHoldAndDependencyGuards(ScratchFixture):
@@ -921,6 +920,7 @@ class TestHoldAndDependencyGuards(ScratchFixture):
     def setUp(self) -> None:
         super().setUp()
         self.cfg = tempfile.mkdtemp(prefix="scratch-cfg-hold-")
+        (Path(self.cfg) / "config").write_text(f"AI_SCRATCH_OWNERS = {self.cfg}/no-owners\n")
         self.env = {"AI_SCRATCH_CONFIG_DIR": self.cfg}
 
     def test_hold_refuses_apply_but_dry_run_still_reports(self):
@@ -1013,6 +1013,7 @@ class TestDependencyCoverage(ScratchFixture):
     def setUp(self) -> None:
         super().setUp()
         self.cfg = tempfile.mkdtemp(prefix="scratch-cfg-deps-")
+        (Path(self.cfg) / "config").write_text(f"AI_SCRATCH_OWNERS = {self.cfg}/no-owners\n")
         self.env = {"AI_SCRATCH_CONFIG_DIR": self.cfg}
 
     def pushed(self, where: Path, name: str) -> Path:
@@ -1136,7 +1137,7 @@ class TestDependencyCoverage(ScratchFixture):
         body = [l for l in Path(manifest).read_text().splitlines() if not l.startswith("deps\t") and not l.startswith("sum\t")]
         tmp = Path(manifest + ".stripped")
         tmp.write_text("\n".join(body) + "\n")
-        digest = subprocess.run(["shasum", "-a", "256", str(tmp)], capture_output=True, text=True).stdout.split()[0]
+        digest = hashlib.sha256(tmp.read_bytes()).hexdigest()
         tmp.write_text("\n".join(body) + f"\nsum\t{digest}\n")
         result = self.sweep_env("--apply", "--manifest", str(tmp))
         self.assertNotEqual(result.returncode, 0)
@@ -1154,3 +1155,27 @@ class TestDependencyCoverage(ScratchFixture):
         self.assertRegex(self.sweep_env("--verbose").stdout, r"KEEP\s+owned\s.*owner record not released")
         (owners / "owned.json").write_text(f'{{"worktree": "{real}", "complete": true, "released": true}}\n')
         self.assertRegex(self.sweep_env().stdout, r"FREE\s+owned\b")
+
+    def test_dependents_inside_the_entry_do_not_pin_it(self):
+        entry = self.pushed(self.root, "with-internal-deps")
+        git(entry, "worktree", "add", "-q", "--detach", str(entry / "inner-wt"))
+        lender = self.pushed(entry, "inner-lender")
+        self.shared(lender, entry / "inner-borrower")
+        git(entry, "add", "-A")  # keep the entry clean for the status rule
+        git(entry, "-c", "user.email=t@example.invalid", "-c", "user.name=Test", "commit", "-qm", "inner")
+        git(entry, "push", "-q", "origin", "HEAD:main")
+        backdate(self.root)
+        out = self.sweep_env("--verbose").stdout
+        self.assertNotRegex(out, r"KEEP\s+with-internal-deps\s.*another repository depends on it")
+
+    def test_sibling_clone_next_to_the_root_is_a_seen_borrower(self):
+        lender = self.pushed(self.root, "lender")
+        sibling = self.root.parent / "sibling-borrower"      # parent/<repo>/.git/objects/info/alternates
+        self.shared(lender, sibling)
+        backdate(self.root)
+        out = self.sweep_env("--verbose").stdout
+        self.assertRegex(out, r"KEEP\s+lender\s.*another repository depends on it")
+
+
+if __name__ == "__main__":
+    unittest.main()

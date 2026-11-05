@@ -143,9 +143,12 @@ reviewable, a bespoke exclusion is not.
   the primary of every linked worktree it finds (the `gitdir:` pointer), and anything named by
   `GIT_ALTERNATE_OBJECT_DIRECTORIES`. An entry that appears in the index is kept however clean, pushed and
   idle it is, and so is an entry whose `.git/worktrees` points outside itself. **Coverage:** the root at
-  full depth, the root's parent to depth 4, and every directory in `AI_SCRATCH_LENDER_SCAN`; a dependency
-  declared anywhere else is not seen, so name that place in `AI_SCRATCH_LENDER_SCAN`. If the scan fails or
-  an alternates file cannot be read, every entry is kept and `--apply` refuses. The dry-run manifest
+  full depth, the root's parent to depth 5 (enough to see a sibling clone's alternates file), and every
+  directory in `AI_SCRATCH_LENDER_SCAN`; a dependency declared anywhere else is not seen, so name that place
+  in `AI_SCRATCH_LENDER_SCAN`. A dependent that lives inside the entry itself (a submodule, a worktree hosted
+  within the entry) does not pin it. If the scan fails, or any directory or alternates file in those
+  locations cannot be read, every entry is kept and `--apply` refuses: with a shared parent such as
+  `/private/tmp`, one unreadable directory is enough, by design. The dry-run manifest
   records a digest of the index; `--apply` rebuilds it and refuses when it differs, so a borrower created
   between review and apply blocks the apply. Do not create new clones that borrow from a disposable
   repository (`git clone --shared`, `--reference` without `--dissociate`): a borrower is only as durable as
