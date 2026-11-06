@@ -202,7 +202,8 @@ scripts/wt.sh check  <repo> <task> [--for-removal] [--no-fetch]
   a record is refused, a released task name is refused, and `..`, `/`, spaces or
   control characters in a name are refused.
 - `list` shows owner, branch, PR, last activity, state (ACTIVE / COMPLETE /
-  RELEASED) and blockers: dirty, unpushed, missing, unregistered, hosts
+  RELEASED) and blockers: dirty, commits not on any remote-tracking ref
+  (informational only, not a preservation check), missing, unregistered, hosts
   worktrees, lends or borrows objects, awaiting cleanup, malformed record.
 - `finish` records completion plus the preservation evidence. Required history
   is HEAD plus every commit in the worktree's private reflog; each is preserved
