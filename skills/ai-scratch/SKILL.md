@@ -202,16 +202,18 @@ scripts/wt.sh check  <repo> <task> [--for-removal] [--no-fetch]
   a record is refused, a released task name is refused, and `..`, `/`, spaces or
   control characters in a name are refused.
 - `list` shows owner, branch, PR, last activity, state (ACTIVE / COMPLETE /
-  RELEASED) and blockers: dirty, unpushed, missing, unregistered, hosts
+  RELEASED) and blockers: dirty, commits not on any remote-tracking ref
+  (informational only, not a preservation check), missing, unregistered, hosts
   worktrees, lends or borrows objects, awaiting cleanup, malformed record.
 - `finish` records completion plus the preservation evidence. Required history
   is HEAD plus every commit in the worktree's private reflog; each is preserved
   only when, checked against the **current** state, it is reachable from the
-  remote default branch (fetched now), or from the live tip of its branch on
-  origin, or a local `refs/keep/*` ref reaches it **and** the bundle named by
-  `--bundle` contains it (the bundle is restored into an empty repository
-  offline on every check; its sha256 is recorded). A merged PR's head ref, a
-  stale remote-tracking ref or a note is not evidence. `--release` sets
+  remote default branch (fetched now), or a local `refs/keep/*` ref reaches it
+  **and** the bundle named by `--bundle` contains it (the bundle is restored
+  into an empty repository offline on every check; its sha256 is recorded). A
+  pushed task branch's live tip is not a basis (the branch can be deleted by a
+  later merge), and neither is a merged PR's head ref, a stale remote-tracking
+  ref or a note. Preservation does not establish completion or owner release. `--release` sets
   `"released": true` only when nothing is unpreserved and the worktree is
   clean, hosts and lends nothing and has no nested repository; otherwise it
   records completion, names the blockers and prints the exact `update-ref` /
@@ -224,8 +226,8 @@ scripts/wt.sh check  <repo> <task> [--for-removal] [--no-fetch]
   every required commit preserved. The plan is that one command followed by the
   non-forced `git worktree remove`; removal stays in that flow. `--no-fetch`
   assesses offline, so only keep refs + bundle count; `finish`/`check` otherwise
-  fetch origin's default branch (and the task branch when needed) into the
-  primary's remote-tracking refs, which is the only thing they write besides the
+  fetch origin's default branch into the
+  primary's remote-tracking ref, which is the only thing they write besides the
   record. A worktree released on keep refs + bundle is cleaned only through the
   printed plan: the sweep's own "every commit on a remote" rule treats
   `refs/keep/*` as local-only history and keeps every worktree of that primary.

@@ -73,6 +73,11 @@ class WtFixture(unittest.TestCase):
     def record(self, task: str = "task1") -> str:
         return (self.owners / "demo" / f"{task}.json").read_text()
 
+    def land(self, wt: Path) -> None:
+        """Push the task branch and land its HEAD on origin/main (the only remote basis)."""
+        git(wt, "push", "-q", "-u", "origin", "HEAD")
+        git(wt, "push", "-q", "origin", "HEAD:refs/heads/main")
+
     def commit_in(self, wt: Path, name: str = "g") -> None:
         (wt / name).write_text("work\n")
         git(wt, "add", name)
@@ -111,7 +116,7 @@ class TestStart(WtFixture):
     def test_a_released_task_name_is_not_reused(self):
         path, _ = self.start()
         self.commit_in(path)
-        git(path, "push", "-q", "-u", "origin", "HEAD")
+        self.land(path)
         self.assertEqual(self.wt("finish", "demo", "task1", "--release").returncode, 0)
         r = self.wt("start", "demo", "task1", "--no-fetch")
         self.assertNotEqual(r.returncode, 0)
@@ -194,7 +199,7 @@ class TestListAndFinish(WtFixture):
     def test_finish_releases_once_everything_is_on_a_remote_and_prints_a_plan_without_executing_it(self):
         path, _ = self.start()
         self.commit_in(path)
-        git(path, "push", "-q", "-u", "origin", "HEAD")
+        self.land(path)
         r = self.wt("finish", "demo", "task1", "--release", "--note", "shipped")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("NOTHING below was executed", r.stdout)
@@ -268,16 +273,41 @@ class TestListAndFinish(WtFixture):
         self.assertIn("on origin/main", rec)
         self.assertIn('"upstream": ""', rec)
 
-    def test_a_stale_remote_tracking_ref_is_not_trusted(self):
+    def test_a_live_task_branch_tip_alone_is_not_preservation(self):
+        # Pushed to its own branch on origin but not on the default branch:
+        # the branch can be deleted by a later merge, so it is not a basis.
         path, _ = self.start()
         self.commit_in(path)
         git(path, "push", "-q", "-u", "origin", "HEAD")
+        self.assertEqual(git(self.remote, "rev-parse", "refs/heads/jp/f/task1"), git(path, "rev-parse", "HEAD"))
+        r = self.wt("finish", "demo", "task1", "--release")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("no preservation basis", r.stderr)
+        self.assertIn('"released": false', self.record())
+        self.assertNotIn("live tip", self.record())
+        # Landing it on the default branch is a basis.
+        git(path, "push", "-q", "origin", "HEAD:refs/heads/main")
         self.assertEqual(self.wt("finish", "demo", "task1", "--release").returncode, 0)
-        git(self.remote, "update-ref", "-d", "refs/heads/jp/f/task1")   # gone on origin; the local remote-tracking ref remains
-        self.assertEqual(git(self.primary, "rev-parse", "--verify", "refs/remotes/origin/jp/f/task1"), git(path, "rev-parse", "HEAD"))
-        r = self.wt("check", "demo", "task1", "--for-removal")
+        self.assertIn("on origin/main", self.record())
+
+    def test_a_hand_set_origin_head_does_not_make_a_task_branch_the_default(self):
+        path, _ = self.start()
+        self.commit_in(path)
+        git(path, "push", "-q", "-u", "origin", "HEAD")
+        git(self.primary, "remote", "set-head", "origin", "jp/f/task1")   # cached symref now names the task branch
+        r = self.wt("finish", "demo", "task1", "--release")
         self.assertNotEqual(r.returncode, 0, r.stdout)
-        self.assertIn("UNPRESERVED", r.stdout)
+        self.assertIn('"released": false', self.record())
+        self.assertNotIn("on origin/jp/f/task1", self.record())
+
+    def test_landed_work_stays_preserved_after_the_task_branch_is_deleted(self):
+        path, _ = self.start()
+        self.commit_in(path)
+        self.land(path)
+        git(self.remote, "update-ref", "-d", "refs/heads/jp/f/task1")
+        r = self.wt("finish", "demo", "task1", "--release")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("on origin/main", self.record())
 
     def _keep_and_bundle(self, shas: list, name: str = "keeps.bundle") -> Path:
         for sha in shas:
@@ -363,7 +393,7 @@ class TestListAndFinish(WtFixture):
     def test_finish_and_check_share_the_gate_list(self):
         path, _ = self.start()
         self.commit_in(path)
-        git(path, "push", "-q", "-u", "origin", "HEAD")
+        self.land(path)
         git(self.primary, "worktree", "lock", "--reason", "in use", str(path))
         r = self.wt("finish", "demo", "task1", "--release")
         self.assertNotEqual(r.returncode, 0)
@@ -451,7 +481,7 @@ class TestListAndFinish(WtFixture):
     def test_the_plan_runs_the_same_validator(self):
         path, _ = self.start()
         self.commit_in(path)
-        git(path, "push", "-q", "-u", "origin", "HEAD")
+        self.land(path)
         r = self.wt("finish", "demo", "task1", "--release")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("check 'demo' 'task1' --for-removal", r.stdout)
@@ -466,7 +496,7 @@ class TestListAndFinish(WtFixture):
     def test_a_later_finish_that_finds_unpreserved_work_withdraws_the_release(self):
         path, _ = self.start()
         self.commit_in(path)
-        git(path, "push", "-q", "-u", "origin", "HEAD")
+        self.land(path)
         self.assertEqual(self.wt("finish", "demo", "task1", "--release").returncode, 0)
         self.assertIn('"released": true', self.record())
         self.commit_in(path, "h")
@@ -491,7 +521,7 @@ class TestListAndFinish(WtFixture):
     def test_the_reflog_check_does_not_depend_on_the_record_naming_the_primary(self):
         path, _ = self.start()
         self.commit_in(path)
-        git(path, "push", "-q", "-u", "origin", "HEAD")
+        self.land(path)
         self.commit_in(path, "h")
         git(path, "reset", "-q", "--hard", "origin/jp/f/task1")
         rec_path = self.owners / "demo" / "task1.json"
@@ -557,7 +587,7 @@ class TestListAndFinish(WtFixture):
     def test_the_printed_plan_runs_and_stops_on_a_lock_or_a_quote_in_the_branch(self):
         path, _ = self.start("quoted", "--branch", "jp/f/it's")
         self.commit_in(path)
-        git(path, "push", "-q", "-u", "origin", "HEAD")
+        self.land(path)
         r = self.wt("finish", "demo", "quoted", "--release")
         self.assertEqual(r.returncode, 0, r.stderr)
         plan = self._plan_checks(r.stdout)
@@ -571,7 +601,7 @@ class TestListAndFinish(WtFixture):
     def test_a_plain_finish_after_a_release_withdraws_it_and_says_so(self):
         path, _ = self.start()
         self.commit_in(path)
-        git(path, "push", "-q", "-u", "origin", "HEAD")
+        self.land(path)
         self.assertEqual(self.wt("finish", "demo", "task1", "--release").returncode, 0)
         r = self.wt("finish", "demo", "task1", "--note", "again")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -581,7 +611,7 @@ class TestListAndFinish(WtFixture):
     def test_the_sweep_consumes_the_records_wt_writes(self):
         done, _ = self.start("done")
         self.commit_in(done)
-        git(done, "push", "-q", "-u", "origin", "HEAD")
+        self.land(done)
         self.assertEqual(self.wt("finish", "demo", "done", "--release").returncode, 0)
         busy, _ = self.start("busy")
         subprocess.run(["find", str(self.wt_root), "-exec", "touch", "-t", OLD, "{}", ";"], capture_output=True)
