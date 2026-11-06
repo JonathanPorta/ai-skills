@@ -219,7 +219,7 @@ blockers_for() {  # <worktree> <primary> <status>; prints a comma list
   fi
   local n
   n="$(g -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"; [ "${n:-0}" = 0 ] || add "dirty ($n)"
-  n="$(g -C "$wt" rev-list --count HEAD --not --remotes 2>/dev/null)" || n="?"; [ "${n:-0}" = 0 ] || add "unpushed ($n)"
+  n="$(g -C "$wt" rev-list --count HEAD --not --remotes 2>/dev/null)" || n="?"; [ "${n:-0}" = 0 ] || add "not on any remote-tracking ref ($n; informational, not a preservation check)"
   [ -d "$wt/.git/worktrees" ] && add "hosts worktrees"
   [ -f "$wt/.git/objects/info/alternates" ] && add "borrows objects"
   if LC_ALL=C grep -lsxF -e "$wt/.git/objects" -e "$wt/.git/objects/" "$WT_PRIMARIES"/*/.git/objects/info/alternates "$WT_ROOT"/*/*/.git/objects/info/alternates 2>/dev/null | grep -q .; then add "lends objects"; fi
@@ -260,19 +260,15 @@ cmd_list() {
 # A SHA is preserved when ONE of these holds, verified against the CURRENT state:
 #   1. it is reachable from the remote default branch, fetched now from origin
 #      (refs/remotes/origin/<default> after an explicit fetch);
-#   2. (none: a pushed task branch's live tip on origin is NOT a basis — the
-#      branch can be deleted at any time, e.g. by a merge with --delete-branch,
-#      leaving only a PR-head ref, which is not preservation either)
-#   3. a local keep ref (refs/keep/*) in the common dir reaches it AND a bundle
+#   2. a local keep ref (refs/keep/*) in the common dir reaches it AND a bundle
 #      named by the record contains it, which is proven by restoring that bundle
 #      into an empty repository offline every time (never trusted from a note).
 # A merged PR's head ref, a stale remote-tracking ref or a free-text note is not
 # evidence. Sets ASSESS_* variables; nothing is written.
 assess_preservation() {  # <wt> <primary> <bundle-path-or-empty> <recorded-bundle-sha-or-empty> <fetch 0/1>
-  local wt="$1" primary="$2" bundle="$3" rec_sha="$4" fetch="$5" head branch adm s def
+  local wt="$1" primary="$2" bundle="$3" rec_sha="$4" fetch="$5" head adm s def
   ASSESS_REQUIRED=""; ASSESS_UNPRESERVED=""; ASSESS_BASIS=""; ASSESS_ERROR=""; ASSESS_NOTE=""; ASSESS_BUNDLE_SHA=""; ASSESS_BUNDLE_COMMITS=""; ASSESS_DEFAULT=""; ASSESS_BUNDLE_OK=0
   head="$(g -C "$wt" rev-parse HEAD 2>/dev/null)" || { ASSESS_ERROR="cannot read HEAD"; return 1; }
-  branch="$(g -C "$wt" symbolic-ref -q --short HEAD 2>/dev/null || printf '')"
   adm="$(g -C "$wt" rev-parse --absolute-git-dir 2>/dev/null)" || adm=""
   ASSESS_REQUIRED="$head"
   if [ -n "$adm" ] && [ -f "$adm/logs/HEAD" ]; then
@@ -281,13 +277,15 @@ assess_preservation() {  # <wt> <primary> <bundle-path-or-empty> <recorded-bundl
       case " $ASSESS_REQUIRED " in *" $s "*) ;; *) ASSESS_REQUIRED="$ASSESS_REQUIRED $s";; esac
     done
   fi
-  # Rules 1 and 2 need the CURRENT remote state, so they run only when a fetch
+  # Rule 1 needs the CURRENT remote state, so it runs only when a fetch
   # is allowed; offline (--no-fetch) only keep refs + a bundle count. A
   # remote-tracking ref that was not refreshed now is not evidence.
   if [ "$fetch" = 1 ]; then
-    def="$(g -C "$primary" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')"
-    [ -n "$def" ] || def="$(g -C "$primary" ls-remote --symref origin HEAD 2>/dev/null | sed -n 's|^ref: refs/heads/\([^[:space:]]*\)[[:space:]]*HEAD$|\1|p' | head -1)"
-    def="${def:-main}"; ASSESS_DEFAULT="$def"
+    # The default branch is what origin says NOW, never the cached origin/HEAD
+    # (a stale or hand-set origin/HEAD could name a task branch).
+    def="$(g -C "$primary" ls-remote --symref origin HEAD 2>/dev/null | sed -n 's|^ref: refs/heads/\([^[:space:]]*\)[[:space:]]*HEAD$|\1|p' | head -1)"
+    [ -n "$def" ] || { ASSESS_ERROR="cannot resolve origin's default branch (ls-remote --symref origin HEAD); run with --no-fetch to assess offline on keep refs + bundle only"; return 1; }
+    ASSESS_DEFAULT="$def"
     g -C "$primary" fetch -q origin "+refs/heads/$def:refs/remotes/origin/$def" 2>/dev/null || { ASSESS_ERROR="cannot fetch origin/$def (origin unreachable, or no such branch on origin); run with --no-fetch to assess offline on keep refs + bundle only"; return 1; }
   else
     ASSESS_NOTE="offline: remote reachability not assessed"

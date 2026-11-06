@@ -290,6 +290,25 @@ class TestListAndFinish(WtFixture):
         self.assertEqual(self.wt("finish", "demo", "task1", "--release").returncode, 0)
         self.assertIn("on origin/main", self.record())
 
+    def test_a_hand_set_origin_head_does_not_make_a_task_branch_the_default(self):
+        path, _ = self.start()
+        self.commit_in(path)
+        git(path, "push", "-q", "-u", "origin", "HEAD")
+        git(self.primary, "remote", "set-head", "origin", "jp/f/task1")   # cached symref now names the task branch
+        r = self.wt("finish", "demo", "task1", "--release")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn('"released": false', self.record())
+        self.assertNotIn("on origin/jp/f/task1", self.record())
+
+    def test_landed_work_stays_preserved_after_the_task_branch_is_deleted(self):
+        path, _ = self.start()
+        self.commit_in(path)
+        self.land(path)
+        git(self.remote, "update-ref", "-d", "refs/heads/jp/f/task1")
+        r = self.wt("finish", "demo", "task1", "--release")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("on origin/main", self.record())
+
     def _keep_and_bundle(self, shas: list, name: str = "keeps.bundle") -> Path:
         for sha in shas:
             git(self.primary, "update-ref", f"refs/keep/task1-{sha[:7]}", sha)
