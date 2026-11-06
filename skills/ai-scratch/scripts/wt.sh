@@ -14,15 +14,15 @@
 #         evidence, then prints the exact cleanup plan. It deletes NOTHING; removal
 #         stays in the verified, non-forced `git worktree remove` flow.
 # check   the validator the plan runs: ownership, dependency and preservation
-#         checks against the current state (fetches origin's default branch and,
-#         if needed, the task branch into the primary's remote-tracking refs —
-#         the only thing either command writes besides the record — and
-#         restores the recorded bundle into an empty repository offline).
-#         Preservation = reachable from the current remote default branch, or
-#         from the live tip of the branch on origin, or a local keep ref plus a
-#         restore-tested bundle kept outside the worktree. A merged PR's head
-#         ref, a stale remote-tracking ref or a note is not enough. --no-fetch
-#         assesses offline: only keep refs + bundle count.
+#         checks against the current state (fetches origin's default branch into
+#         the primary's remote-tracking ref — the only thing either command
+#         writes besides the record — and restores the recorded bundle into an
+#         empty repository offline). Preservation = reachable from the freshly
+#         fetched remote default branch, or a local keep ref plus a
+#         restore-tested bundle kept outside the worktree. A pushed task
+#         branch's live tip, a merged PR's head ref, a stale remote-tracking ref
+#         or a note is not enough. --no-fetch assesses offline: only keep refs
+#         + bundle count. Preservation is not completion or owner release.
 #
 # Ownership records are the flat JSON files scratch-sweep.sh consumes (see
 # scratch_owner_record_parse in lib-scratch.sh); there is one format, not two.
@@ -260,15 +260,16 @@ cmd_list() {
 # A SHA is preserved when ONE of these holds, verified against the CURRENT state:
 #   1. it is reachable from the remote default branch, fetched now from origin
 #      (refs/remotes/origin/<default> after an explicit fetch);
-#   2. it is reachable from the live tip of its own branch on origin (ls-remote),
-#      with that tip present locally (fetched now if needed);
+#   2. (none: a pushed task branch's live tip on origin is NOT a basis — the
+#      branch can be deleted at any time, e.g. by a merge with --delete-branch,
+#      leaving only a PR-head ref, which is not preservation either)
 #   3. a local keep ref (refs/keep/*) in the common dir reaches it AND a bundle
 #      named by the record contains it, which is proven by restoring that bundle
 #      into an empty repository offline every time (never trusted from a note).
 # A merged PR's head ref, a stale remote-tracking ref or a free-text note is not
 # evidence. Sets ASSESS_* variables; nothing is written.
 assess_preservation() {  # <wt> <primary> <bundle-path-or-empty> <recorded-bundle-sha-or-empty> <fetch 0/1>
-  local wt="$1" primary="$2" bundle="$3" rec_sha="$4" fetch="$5" head branch adm s def tip=""
+  local wt="$1" primary="$2" bundle="$3" rec_sha="$4" fetch="$5" head branch adm s def
   ASSESS_REQUIRED=""; ASSESS_UNPRESERVED=""; ASSESS_BASIS=""; ASSESS_ERROR=""; ASSESS_NOTE=""; ASSESS_BUNDLE_SHA=""; ASSESS_BUNDLE_COMMITS=""; ASSESS_DEFAULT=""; ASSESS_BUNDLE_OK=0
   head="$(g -C "$wt" rev-parse HEAD 2>/dev/null)" || { ASSESS_ERROR="cannot read HEAD"; return 1; }
   branch="$(g -C "$wt" symbolic-ref -q --short HEAD 2>/dev/null || printf '')"
@@ -288,10 +289,6 @@ assess_preservation() {  # <wt> <primary> <bundle-path-or-empty> <recorded-bundl
     [ -n "$def" ] || def="$(g -C "$primary" ls-remote --symref origin HEAD 2>/dev/null | sed -n 's|^ref: refs/heads/\([^[:space:]]*\)[[:space:]]*HEAD$|\1|p' | head -1)"
     def="${def:-main}"; ASSESS_DEFAULT="$def"
     g -C "$primary" fetch -q origin "+refs/heads/$def:refs/remotes/origin/$def" 2>/dev/null || { ASSESS_ERROR="cannot fetch origin/$def (origin unreachable, or no such branch on origin); run with --no-fetch to assess offline on keep refs + bundle only"; return 1; }
-    if [ -n "$branch" ]; then
-      tip="$(g -C "$wt" ls-remote origin "refs/heads/$branch" 2>/dev/null | LC_ALL=C awk -v r="refs/heads/$branch" '$2 == r { print $1; exit }')"
-      [ -z "$tip" ] || g -C "$primary" cat-file -e "$tip^{commit}" 2>/dev/null || g -C "$primary" fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null || tip=""
-    fi
   else
     ASSESS_NOTE="offline: remote reachability not assessed"
   fi
@@ -323,9 +320,6 @@ assess_preservation() {  # <wt> <primary> <bundle-path-or-empty> <recorded-bundl
   for s in $ASSESS_REQUIRED; do
     if [ "$fetch" = 1 ] && g -C "$primary" merge-base --is-ancestor "$s" "refs/remotes/origin/$def" 2>/dev/null; then
       ASSESS_BASIS="$ASSESS_BASIS${ASSESS_BASIS:+; }${s:0:7}: on origin/$def"; continue
-    fi
-    if [ -n "$tip" ] && g -C "$primary" merge-base --is-ancestor "$s" "$tip" 2>/dev/null; then
-      ASSESS_BASIS="$ASSESS_BASIS${ASSESS_BASIS:+; }${s:0:7}: on origin/$branch (live tip ${tip:0:7})"; continue
     fi
     if [ "$ASSESS_BUNDLE_OK" = 1 ] && git -C "$restore" cat-file -e "$s^{commit}" 2>/dev/null; then
       local kept=""
