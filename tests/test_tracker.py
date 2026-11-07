@@ -327,7 +327,7 @@ class WorkflowTests(WorkflowFixture):
     def test_finish_refuses_the_live_checkout_and_unowned_worktrees(self):
         result = self.run_script(FINISH, "--tracker-dir", str(self.notes / self.tracker_rel), "--no-push")
         self.assertEqual(result.returncode, 2)
-        self.assertIn("not a wt.sh task worktree with an ownership record", result.stderr)
+        self.assertIn("not a wt.sh task worktree with an unreleased ownership record", result.stderr)
         foreign = self.tmp / "foreign"
         git(self.notes, "worktree", "add", "-q", "-b", "jp/d/foreign", str(foreign))
         result = self.run_script(FINISH, "--tracker-dir", str(foreign / self.tracker_rel), "--no-push")
@@ -403,6 +403,40 @@ class WorkflowTests(WorkflowFixture):
         record = json.loads((self.owners / "notes" / "tracker-example-20261103.json").read_text())
         self.assertFalse(record["released"], "release is wt.sh finish's job, after the merge")
         self.assertTrue((self.notes / self.tracker_rel).exists(), "the live checkout is untouched")
+
+
+class OwnershipTests(WorkflowFixture):
+    def test_finish_refuses_another_sessions_worktree_and_begin_needs_an_owner(self):
+        out = self.begin()
+        tracker_dir = Path(out["TRACKER_DIR"])
+        self.change_state(tracker_dir)
+        result = self.run_script(FINISH, "--tracker-dir", str(tracker_dir), "--no-push",
+                                 env_extra={"WT_OWNER": "another-session"})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("owned by another-session", result.stderr)
+        self.assertEqual(git(Path(out["TRACKER_WORKTREE"]), "log", "--format=%s", "-1"), "seed")
+        env = {k: v for k, v in self.env.items() if k != "WT_OWNER"}
+        result = subprocess.run(["bash", str(BEGIN), "--project", "Example", "--date", "2026-11-09"],
+                                capture_output=True, text=True, timeout=120, env=env)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("set WT_OWNER", result.stderr)
+
+    def test_work_worktree_uses_its_own_branch_and_follows_the_published_default(self):
+        work_origin = self.tmp / "work-origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(work_origin)], check=True)
+        git(self.work, "remote", "add", "origin", str(work_origin))
+        git(self.work, "push", "-q", "-u", "origin", "main")
+        git(self.work, "remote", "set-head", "origin", "main")
+        out = self.begin()
+        sibling = Path(out["TRACKER_WORK_SIBLING"])
+        self.assertEqual(git(sibling, "symbolic-ref", "--short", "HEAD"), "jp/d/example-tracker-20261103-hub-input")
+        (self.work / "later.md").write_text("published later\n")
+        git(self.work, "add", "-A")
+        git(self.work, "commit", "-qm", "later")
+        git(self.work, "push", "-q")
+        self.begin()
+        self.assertEqual(git(sibling, "rev-parse", "HEAD"), git(self.work, "rev-parse", "origin/main"))
+        self.assertEqual(git(self.work, "symbolic-ref", "--short", "HEAD"), "main")
 
 
 class MigrationTests(unittest.TestCase):

@@ -55,14 +55,16 @@ grouped by repository, each workstream's `repository` field naming its repo.
    on `main` before a PR exists.
    ```bash
    eval "$(scripts/tracker-begin.sh --project "<Name>")"
-   # prints TRACKER_BRANCH, TRACKER_WORKTREE, TRACKER_DIR, TRACKER_SLUG, TRACKER_EXISTS
+   # prints TRACKER_BRANCH, TRACKER_TASK, TRACKER_WORKTREE, TRACKER_DIR, TRACKER_SLUG,
+   # TRACKER_EXISTS and, when TrackerHub exists, TRACKER_WORK_SIBLING
    ```
    Set `WT_OWNER` to your session id first. It creates `jp/d/<slug>-tracker-<date>`
    from `origin/main` in a task worktree made by the ai-scratch helper
    (`wt.sh start`), at `~/devel/worktrees/portaj/Personal/tracker-<slug>-<date>`
-   with an ownership record. A second `wt.sh` worktree of the work vault
-   (`…/Work/tracker-<slug>-<date>`, at origin's default branch, read-only) is
-   made so the hub build can verify both. Never put tracker work under
+   with an ownership record (it refuses to run without `WT_OWNER`). A second
+   `wt.sh` worktree of the work vault (`…/Work/tracker-<slug>-<date>`, on a local
+   `<branch>-hub-input` branch fast-forwarded to origin's default, never committed
+   to or pushed) is made so the hub build can verify both. Never put tracker work under
    `/private/tmp` or make another clone of a vault. Pass
    `--base main` when the vault's local `main` is ahead of `origin/main` — the
    Obsidian backup plugin does not always push — and tell the operator the

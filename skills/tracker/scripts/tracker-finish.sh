@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Finish a tracker change: render, verify, rebuild TrackerHub, commit, push, open the PR.
 #
-#   tracker-finish.sh --tracker-dir DIR [--title "..."] [--no-pr] [--no-push] [--keep]
+#   tracker-finish.sh --tracker-dir DIR [--work DIR] [--title "..."] [--no-pr] [--no-push] [--keep]
 #
 # Two commits are made on the branch: the tracker itself, then the TrackerHub
 # rebuild (its catalog pins the tracker's commit, so it cannot be the same
@@ -23,12 +23,14 @@ set -euo pipefail
 skill_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 render="$skill_dir/scripts/render_tracker.py"
 tracker_dir=""
+work_vault=""
 title=""
 open_pr=1
 push=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --tracker-dir) tracker_dir="$2"; shift 2 ;;
+    --work) work_vault="$2"; shift 2 ;;
     --title) title="$2"; shift 2 ;;
     --no-pr) open_pr=0; shift ;;
     --no-push) push=0; open_pr=0; shift ;;
@@ -47,20 +49,24 @@ wt="${TRACKER_WT:-$skill_dir/../ai-scratch/scripts/wt.sh}"
 # shellcheck source=/dev/null
 . "$(dirname "$wt")/lib-scratch.sh"
 owners="$(scratch_owners_dir)"
-# owned <worktree>: a linked worktree whose wt.sh ownership record names exactly this path.
+me="${WT_OWNER:-$(id -un)@$(hostname -s 2>/dev/null || hostname)}"
+# owned <worktree>: a linked worktree whose wt.sh ownership record names exactly this
+# path, belongs to this session (WT_OWNER, as wt.sh defines it) and is not released.
 owned() {
   local w="$1" rec; rec="$owners/$(basename "$(dirname "$w")")/$(basename "$w").json"
-  [ -f "$w/.git" ] && [ -f "$rec" ] && python3 - "$rec" "$w" <<'PY'
+  [ -f "$w/.git" ] && [ -f "$rec" ] && python3 - "$rec" "$w" "$me" <<'PY'
 import json, os, sys
 rec = json.load(open(sys.argv[1]))
-sys.exit(0 if os.path.realpath(rec.get('worktree', '')) == os.path.realpath(sys.argv[2]) else 1)
+ok = (os.path.realpath(rec.get('worktree', '')) == os.path.realpath(sys.argv[2])
+      and rec.get('owner_session') == sys.argv[3] and rec.get('released') is not True)
+sys.exit(0 if ok else 1)
 PY
 }
 
 if ! owned "$worktree"; then
   # A linked worktree has a .git file; the live checkout has a .git directory.
   # Either way, only a wt.sh task worktree with an ownership record may be finished.
-  printf 'refusing: %s is not a wt.sh task worktree with an ownership record (run tracker-begin.sh)\n' "$worktree" >&2
+  printf 'refusing: %s is not a wt.sh task worktree with an unreleased ownership record owned by %s (run tracker-begin.sh)\n' "$worktree" "$me" >&2
   exit 2
 fi
 branch="$(git -C "$worktree" rev-parse --abbrev-ref HEAD)"
@@ -90,7 +96,7 @@ import json, sys
 print(next((r['repository'] for r in json.load(open(sys.argv[1]))['repositories'] if r['repository'].endswith('/notes-work')), ''))
 PY
 )"
-  work_vault="${TRACKER_WORK_REPO:-$HOME/Obsidian/Work}"
+  work_vault="${work_vault:-${TRACKER_WORK_REPO:-$HOME/Obsidian/Work}}"
   [ -d "$work_vault" ] && sibling="$wt_root/$(basename "$(cd "$work_vault" && pwd -P)")/$task"
   hub_root=(--root "$work_repo=$sibling")
   if [ -z "$work_repo" ] || [ -z "$sibling" ] || [ ! -d "$sibling" ] || ! owned "$sibling"; then

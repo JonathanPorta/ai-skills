@@ -36,6 +36,7 @@ done
 [ -n "$project" ] || { printf -- '--project is required\n' >&2; exit 2; }
 [ -d "$notes/.git" ] || [ -f "$notes/.git" ] || { printf 'notes checkout not found: %s\n' "$notes" >&2; exit 2; }
 [ -x "$wt" ] || { printf 'wt.sh not found at %s; install the ai-scratch skill or set TRACKER_WT\n' "$wt" >&2; exit 2; }
+[ -n "${WT_OWNER:-}" ] || { printf 'set WT_OWNER to this session id first, so the ownership records tell sessions apart\n' >&2; exit 2; }
 case "$project" in */*|.*|*..*) printf 'project name must be a plain directory name\n' >&2; exit 2 ;; esac
 
 slug="$(printf '%s' "$project" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
@@ -43,18 +44,18 @@ slug="$(printf '%s' "$project" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9
 branch="jp/d/${slug}-tracker-${date_tag}"
 task="tracker-${slug}-${date_tag}"
 
-# wt_start <vault> <base> <purpose>: prints the worktree path wt.sh created or resumed.
+# wt_start <vault> <branch> <base> <purpose>: prints the worktree path wt.sh created or resumed.
 wt_start() {
   local vault parent out
   vault="$(cd "$1" && pwd -P)"; parent="$(dirname "$vault")"
-  out="$(WT_PRIMARIES="$parent" "$wt" start "$(basename "$vault")" "$task" --branch "$branch" --base "$2" --purpose "$3")" || exit 2
+  out="$(WT_PRIMARIES="$parent" "$wt" start "$(basename "$vault")" "$task" --branch "$2" --base "$3" --purpose "$4")" || exit 2
   printf '%s\n' "$out" | sed -n 's/^WT_PATH=//p'
 }
 
 git -C "$notes" fetch -q origin
 default="$(git -C "$notes" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')"
 default="${default:-main}"
-personal="$(wt_start "$notes" "${base:-origin/$default}" "$project tracker update")"
+personal="$(wt_start "$notes" "$branch" "${base:-origin/$default}" "$project tracker update")"
 [ -n "$personal" ] || { printf 'wt.sh did not report a worktree path\n' >&2; exit 2; }
 
 hub="$personal/Projects/TrackerHub/build.py"
@@ -69,16 +70,20 @@ PY
     exit 2
   fi
   # The hub must verify the work vault's maps as published, not as the local
-  # checkout happens to be, so the worktree starts at origin's default branch
-  # (falling back to the local HEAD when there is no remote). It is read-only.
+  # checkout happens to be. wt.sh always checks out a branch, so the work-vault
+  # worktree gets its own local <branch>-hub-input branch at origin's default
+  # (local HEAD without a remote). Nothing commits to it or pushes it; on a
+  # resumed task it is fast-forwarded, and a branch that cannot fast-forward is refused.
   work_ref="HEAD"
   if git -C "$work" fetch -q origin 2>/dev/null; then
     work_default="$(git -C "$work" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')"
     work_ref="origin/${work_default:-main}"
     git -C "$work" rev-parse -q --verify "$work_ref^{commit}" >/dev/null 2>&1 || work_ref="HEAD"
   fi
-  sibling="$(wt_start "$work" "$work_ref" "TrackerHub build input (read-only) for the $project tracker")"
+  sibling="$(wt_start "$work" "$branch-hub-input" "$work_ref" "TrackerHub build input for the $project tracker (never committed to or pushed)")"
   [ -n "$sibling" ] || { printf 'wt.sh did not report the work-vault worktree path\n' >&2; exit 2; }
+  git -C "$sibling" merge -q --ff-only "$work_ref" >/dev/null 2>&1 \
+    || { printf 'the work-vault worktree %s cannot fast-forward to %s; refusing to verify stale work maps\n' "$sibling" "$work_ref" >&2; exit 2; }
 fi
 
 tracker_dir="$personal/Projects/$project/Tracker"
