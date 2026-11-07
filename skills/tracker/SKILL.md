@@ -57,9 +57,13 @@ grouped by repository, each workstream's `repository` field naming its repo.
    eval "$(scripts/tracker-begin.sh --project "<Name>")"
    # prints TRACKER_BRANCH, TRACKER_WORKTREE, TRACKER_DIR, TRACKER_SLUG, TRACKER_EXISTS
    ```
-   It creates `jp/d/<slug>-tracker-<date>` from `origin/main` in a scratch
-   worktree, plus a detached sibling worktree of the work vault (at the path the
-   hub's `config.json` names) so the hub build can verify both. Pass
+   Set `WT_OWNER` to your session id first. It creates `jp/d/<slug>-tracker-<date>`
+   from `origin/main` in a task worktree made by the ai-scratch helper
+   (`wt.sh start`), at `~/devel/worktrees/portaj/Personal/tracker-<slug>-<date>`
+   with an ownership record. A second `wt.sh` worktree of the work vault
+   (`…/Work/tracker-<slug>-<date>`, at origin's default branch, read-only) is
+   made so the hub build can verify both. Never put tracker work under
+   `/private/tmp` or make another clone of a vault. Pass
    `--base main` when the vault's local `main` is ahead of `origin/main` — the
    Obsidian backup plugin does not always push — and tell the operator the
    branch cannot be PR'd until `main` is.
@@ -112,20 +116,26 @@ grouped by repository, each workstream's `repository` field naming its repo.
 
 6. **Finish.** Renders, verifies with `--check`, rebuilds TrackerHub, commits,
    and — with operator authority for the notes repository — pushes and opens
-   the PR. It refuses to run anywhere but a worktree `tracker-begin.sh`
-   recorded; when the hub exists it requires the work-vault sibling and a
-   passing hub build before anything is pushed; and it re-renders the PNG with
+   the PR. It refuses to run anywhere but a `wt.sh` task worktree with an
+   ownership record; when the hub exists it requires the task's work-vault
+   worktree and a passing hub build (given that worktree with `--root`) before
+   anything is pushed; and it re-renders the PNG with
    Inkscape or refuses to ship one (no Inkscape and a PNG or a README reference
-   to one is an error — the image must never contradict the state). After a
-   push it removes only the worktrees it created, only if they are clean;
-   `--keep` skips that.
+   to one is an error — the image must never contradict the state). It removes
+   nothing; it prints the `wt.sh` commands for step 7.
    ```bash
    scripts/tracker-finish.sh --tracker-dir "$TRACKER_DIR" [--title "docs: ..."] [--no-push]
    ```
    Two commits are made on purpose: the tracker, then the hub rebuild, because
    the hub catalog pins the tracker's commit SHA. Ask for the PR to be merged
-   with **rebase**, not squash, so those pins stay resolvable. Lead the reply
-   with the PR URL.
+   with a **merge commit** (or rebase), not squash, so those pins stay
+   resolvable. Lead the reply with the PR URL.
+
+7. **After the merge, finish through `wt.sh`.** For each of the two task
+   worktrees run the `wt.sh finish … --pr <url> --release` and
+   `wt.sh check … --for-removal` lines `tracker-finish.sh` printed. Remove a
+   worktree only with the non-forced `git worktree remove` that the passing
+   check prints, and only with the operator's authority.
 
 ## Publication authority
 
