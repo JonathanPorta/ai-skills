@@ -80,6 +80,8 @@ PY
     work_ref="origin/${work_default:-main}"
     git -C "$work" rev-parse -q --verify "$work_ref^{commit}" >/dev/null 2>&1 || work_ref="HEAD"
   fi
+  # Resolve in the primary: inside the work worktree, HEAD would mean its own HEAD.
+  work_ref="$(git -C "$work" rev-parse "$work_ref^{commit}")"
   sibling="$(wt_start "$work" "$branch-hub-input" "$work_ref" "TrackerHub build input for the $project tracker (never committed to or pushed)")"
   [ -n "$sibling" ] || { printf 'wt.sh did not report the work-vault worktree path\n' >&2; exit 2; }
   git -C "$sibling" merge -q --ff-only "$work_ref" >/dev/null 2>&1 \

@@ -421,6 +421,15 @@ class OwnershipTests(WorkflowFixture):
         self.assertEqual(result.returncode, 2)
         self.assertIn("set WT_OWNER", result.stderr)
 
+    def test_work_worktree_follows_the_primary_head_without_a_remote(self):
+        out = self.begin()
+        sibling = Path(out["TRACKER_WORK_SIBLING"])
+        (self.work / "local.md").write_text("local only\n")
+        git(self.work, "add", "-A")
+        git(self.work, "commit", "-qm", "local")
+        self.begin()
+        self.assertEqual(git(sibling, "rev-parse", "HEAD"), git(self.work, "rev-parse", "HEAD"))
+
     def test_work_worktree_uses_its_own_branch_and_follows_the_published_default(self):
         work_origin = self.tmp / "work-origin.git"
         subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(work_origin)], check=True)
