@@ -207,7 +207,8 @@ HUB_STUB = """#!/usr/bin/env python3
 import json, pathlib, sys
 root = pathlib.Path(__file__).resolve().parents[2]
 config = json.loads((root / 'Projects' / 'TrackerHub' / 'config.json').read_text())
-work = (root / 'Projects' / 'TrackerHub' / config['repositories'][1]['root']).resolve()
+roots = dict(a.split('=', 1) for a in sys.argv[sys.argv.index('--root') + 1:sys.argv.index('--root') + 2]) if '--root' in sys.argv else {}
+work = pathlib.Path(roots.get(config['repositories'][1]['repository']) or (root / 'Projects' / 'TrackerHub' / config['repositories'][1]['root'])).resolve()
 if not work.is_dir():
     print('Tracker build failed: missing work vault ' + str(work), file=sys.stderr)
     raise SystemExit(1)
@@ -268,8 +269,14 @@ class WorkflowFixture(unittest.TestCase):
         git(self.work, "add", "-A")
         git(self.work, "commit", "-qm", "seed")
         self.scratch = self.tmp / "scratch"
+        self.wt_root = self.tmp / "worktrees"
+        self.owners = self.tmp / "owners"
+        cfg = self.tmp / "cfg"
+        cfg.mkdir()
+        (cfg / "config").write_text(f"AI_SCRATCH_OWNERS = {self.owners}\n")
         self.env = dict(os.environ, TRACKER_NOTES_REPO=str(self.notes), TRACKER_WORK_REPO=str(self.work),
                         AI_SCRATCH_ROOT=str(self.scratch), TRACKER_NO_PNG="1",
+                        WT_ROOT=str(self.wt_root), AI_SCRATCH_CONFIG_DIR=str(cfg), WT_OWNER="test-session",
                         GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="t@example.invalid",
                         GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="t@example.invalid")
 
@@ -296,8 +303,17 @@ class WorkflowTests(WorkflowFixture):
         out = self.begin()
         worktree, tracker_dir = Path(out["TRACKER_WORKTREE"]), Path(out["TRACKER_DIR"])
         self.assertEqual(out["TRACKER_EXISTS"], "1")
+        task = "tracker-example-20261103"
+        self.assertEqual(worktree, self.wt_root / "notes" / task)
+        self.assertEqual(Path(out["TRACKER_WORK_SIBLING"]), self.wt_root / "work" / task)
         self.assertTrue(Path(out["TRACKER_WORK_SIBLING"]).is_dir())
-        self.assertTrue(str(Path(out["TRACKER_WORK_SIBLING"])).startswith(str(self.scratch)))
+        for repo in ("notes", "work"):
+            record = json.loads((self.owners / repo / f"{task}.json").read_text())
+            self.assertEqual(record["owner_session"], "test-session")
+            self.assertEqual(Path(record["worktree"]), self.wt_root / repo / task)
+        self.assertFalse(self.scratch.exists(), "nothing is placed in the scratch root (/private/tmp)")
+        self.assertEqual(git(self.notes, "symbolic-ref", "--short", "HEAD"), "main", "the primary stays on its branch")
+        self.assertEqual(git(self.work, "symbolic-ref", "--short", "HEAD"), "main")
         self.change_state(tracker_dir)
         result = self.run_script(FINISH, "--tracker-dir", str(tracker_dir), "--no-push")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -305,68 +321,45 @@ class WorkflowTests(WorkflowFixture):
         self.assertEqual(log.splitlines(), ["docs: Rebuild TrackerHub With The Example Tracker",
                                             "docs: Update The Example Project Tracker", "seed"])
         self.assertIn("HUB_COMMIT=", result.stdout)
-        self.assertTrue(worktree.exists(), "--no-push never cleans up")
+        self.assertTrue(worktree.exists(), "finish never removes worktrees")
+        self.assertIn("wt.sh finish", result.stdout)
 
     def test_finish_refuses_the_live_checkout_and_unowned_worktrees(self):
         result = self.run_script(FINISH, "--tracker-dir", str(self.notes / self.tracker_rel), "--no-push")
         self.assertEqual(result.returncode, 2)
-        self.assertIn("not a worktree created by tracker-begin.sh", result.stderr)
+        self.assertIn("not a wt.sh task worktree with an unreleased ownership record", result.stderr)
         foreign = self.tmp / "foreign"
         git(self.notes, "worktree", "add", "-q", "-b", "jp/d/foreign", str(foreign))
         result = self.run_script(FINISH, "--tracker-dir", str(foreign / self.tracker_rel), "--no-push")
         self.assertEqual(result.returncode, 2)
         self.assertTrue((foreign / self.tracker_rel).exists())
 
-    def test_begin_refuses_a_hub_root_outside_the_task_and_a_missing_work_vault(self):
-        hub = self.notes / "Projects" / "TrackerHub"
-        escaping = dict(HUB_CONFIG)
-        escaping["repositories"] = [HUB_CONFIG["repositories"][0],
-                                    {"repository": "X/notes-work", "root": "../../../../../outside", "group": "work"}]
-        (hub / "config.json").write_text(json.dumps(escaping))
-        git(self.notes, "commit", "-qam", "escape")
-        git(self.notes, "push", "-q")
-        result = self.run_script(BEGIN, "--project", "Example", "--date", "2026-11-03")
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("outside the task directory", result.stderr)
-        self.assertFalse((self.tmp / "outside").exists())
-        (hub / "config.json").write_text(json.dumps(HUB_CONFIG))
-        git(self.notes, "commit", "-qam", "restore")
-        git(self.notes, "push", "-q")
-        result = self.run_script(BEGIN, "--project", "Example", "--date", "2026-11-04",
-                                 env_extra={"TRACKER_WORK_REPO": str(self.tmp / "nowhere")})
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("work vault is not at", result.stderr)
-
-    def test_begin_refuses_a_symlinked_parent_that_escapes_the_task(self):
+    def test_begin_never_creates_anything_at_the_config_path_and_needs_the_work_vault(self):
         outside = self.tmp / "outside"
         outside.mkdir()
         hub = self.notes / "Projects" / "TrackerHub"
         (hub / "Link").symlink_to(outside, target_is_directory=True)
-        linked = dict(HUB_CONFIG)
-        linked["repositories"] = [HUB_CONFIG["repositories"][0],
-                                  {"repository": "X/notes-work", "root": "Link/Work", "group": "work"}]
-        (hub / "config.json").write_text(json.dumps(linked))
-        git(self.notes, "add", "-A")
-        git(self.notes, "commit", "-qm", "symlink escape")
-        git(self.notes, "push", "-q")
-        result = self.run_script(BEGIN, "--project", "Example", "--date", "2026-11-03")
-        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn("outside the task directory", result.stderr)
-        self.assertEqual(sorted(p.name for p in outside.iterdir()), [], "nothing was created at the symlink target")
-        self.assertNotIn("Work", git(self.work, "worktree", "list"))
-
-    def test_cleanup_never_removes_a_worktree_that_resolves_outside_the_task(self):
-        out = self.begin()
-        worktree, tracker_dir = Path(out["TRACKER_WORKTREE"]), Path(out["TRACKER_DIR"])
-        external = self.tmp / "external-worktree"
-        git(self.notes, "worktree", "add", "-q", "--detach", str(external), "HEAD")
-        marker = Path(out["TRACKER_WORKTREE"]).parent / ".tracker-worktrees"
-        marker.write_text(marker.read_text() + str(external) + "\n")
-        self.change_state(tracker_dir)
-        result = self.run_script(FINISH, "--tracker-dir", str(tracker_dir), "--no-pr")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(external.exists(), "an external path listed in the marker must survive")
-        self.assertIn("resolves outside the task directory", result.stderr)
+        for day, root in (("05", "../../../../../escape"), ("06", "Link/Work")):
+            config = dict(HUB_CONFIG)
+            config["repositories"] = [HUB_CONFIG["repositories"][0],
+                                      {"repository": "X/notes-work", "root": root, "group": "work"}]
+            (hub / "config.json").write_text(json.dumps(config))
+            git(self.notes, "add", "-A")
+            git(self.notes, "commit", "-qm", "root " + root)
+            git(self.notes, "push", "-q")
+            result = self.run_script(BEGIN, "--project", "Example", "--date", f"2026-11-{day}")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            out = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+            self.assertEqual(Path(out["TRACKER_WORK_SIBLING"]), self.wt_root / "work" / f"tracker-example-202611{day}")
+            self.assertFalse((self.tmp / "escape").exists())
+            self.assertEqual(sorted(p.name for p in outside.iterdir()), [], "nothing at the symlink target")
+        result = self.run_script(BEGIN, "--project", "Example", "--date", "2026-11-04",
+                                 env_extra={"TRACKER_WORK_REPO": str(self.tmp / "nowhere")})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("work vault is not at", result.stderr)
+        result = self.run_script(BEGIN, "--project", "Example", "--scratch", str(self.scratch))
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(self.scratch.exists())
 
     def test_finish_requires_the_hub_sibling_before_committing(self):
         out = self.begin()
@@ -395,35 +388,64 @@ class WorkflowTests(WorkflowFixture):
         self.assertIn("references example-project-mindmap.png", result.stderr)
         self.assertEqual(git(worktree, "log", "--format=%s", "-1"), "seed")
 
-    def test_cleanup_keeps_dirty_worktrees_and_removes_clean_owned_ones(self):
+    def test_finish_pushes_but_removes_nothing_and_hands_off_to_wt(self):
         out = self.begin()
         worktree, tracker_dir = Path(out["TRACKER_WORKTREE"]), Path(out["TRACKER_DIR"])
         sibling = Path(out["TRACKER_WORK_SIBLING"])
         self.change_state(tracker_dir)
-        stray = worktree / "unrelated-note.md"
-        stray.write_text("do not lose me\n")
         result = self.run_script(FINISH, "--tracker-dir", str(tracker_dir), "--no-pr")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(stray.exists(), "an untracked file must survive cleanup")
-        self.assertIn("keeping", result.stderr)
         self.assertIn("jp/d/example-tracker-20261103", git(self.notes, "branch", "-r", "--list", "origin/*"))
-        stray.unlink()
-        result = self.run_script(FINISH, "--tracker-dir", str(tracker_dir), "--no-pr")
-        self.assertEqual(result.returncode, 1, "nothing new to commit on a resumed clean run")
         self.assertTrue(worktree.exists())
-
-    def test_cleanup_removes_only_owned_clean_worktrees(self):
-        out = self.begin()
-        worktree, tracker_dir = Path(out["TRACKER_WORKTREE"]), Path(out["TRACKER_DIR"])
-        sibling = Path(out["TRACKER_WORK_SIBLING"])
-        self.change_state(tracker_dir)
-        result = self.run_script(FINISH, "--tracker-dir", str(tracker_dir), "--no-pr")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(worktree.exists())
-        self.assertFalse(sibling.exists())
-        self.assertFalse((self.scratch / "tracker-example-20261103").exists())
-        self.assertIn("jp/d/example-tracker-20261103", git(self.notes, "branch", "--list"))
+        self.assertTrue(sibling.exists())
+        self.assertIn("finish notes tracker-example-20261103 --pr", result.stdout)
+        self.assertIn("check  work tracker-example-20261103 --for-removal", result.stdout)
+        record = json.loads((self.owners / "notes" / "tracker-example-20261103.json").read_text())
+        self.assertFalse(record["released"], "release is wt.sh finish's job, after the merge")
         self.assertTrue((self.notes / self.tracker_rel).exists(), "the live checkout is untouched")
+
+
+class OwnershipTests(WorkflowFixture):
+    def test_finish_refuses_another_sessions_worktree_and_begin_needs_an_owner(self):
+        out = self.begin()
+        tracker_dir = Path(out["TRACKER_DIR"])
+        self.change_state(tracker_dir)
+        result = self.run_script(FINISH, "--tracker-dir", str(tracker_dir), "--no-push",
+                                 env_extra={"WT_OWNER": "another-session"})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("owned by another-session", result.stderr)
+        self.assertEqual(git(Path(out["TRACKER_WORKTREE"]), "log", "--format=%s", "-1"), "seed")
+        env = {k: v for k, v in self.env.items() if k != "WT_OWNER"}
+        result = subprocess.run(["bash", str(BEGIN), "--project", "Example", "--date", "2026-11-09"],
+                                capture_output=True, text=True, timeout=120, env=env)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("set WT_OWNER", result.stderr)
+
+    def test_work_worktree_follows_the_primary_head_without_a_remote(self):
+        out = self.begin()
+        sibling = Path(out["TRACKER_WORK_SIBLING"])
+        (self.work / "local.md").write_text("local only\n")
+        git(self.work, "add", "-A")
+        git(self.work, "commit", "-qm", "local")
+        self.begin()
+        self.assertEqual(git(sibling, "rev-parse", "HEAD"), git(self.work, "rev-parse", "HEAD"))
+
+    def test_work_worktree_uses_its_own_branch_and_follows_the_published_default(self):
+        work_origin = self.tmp / "work-origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(work_origin)], check=True)
+        git(self.work, "remote", "add", "origin", str(work_origin))
+        git(self.work, "push", "-q", "-u", "origin", "main")
+        git(self.work, "remote", "set-head", "origin", "main")
+        out = self.begin()
+        sibling = Path(out["TRACKER_WORK_SIBLING"])
+        self.assertEqual(git(sibling, "symbolic-ref", "--short", "HEAD"), "jp/d/example-tracker-20261103-hub-input")
+        (self.work / "later.md").write_text("published later\n")
+        git(self.work, "add", "-A")
+        git(self.work, "commit", "-qm", "later")
+        git(self.work, "push", "-q")
+        self.begin()
+        self.assertEqual(git(sibling, "rev-parse", "HEAD"), git(self.work, "rev-parse", "origin/main"))
+        self.assertEqual(git(self.work, "symbolic-ref", "--short", "HEAD"), "main")
 
 
 class MigrationTests(unittest.TestCase):

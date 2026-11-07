@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Finish a tracker change: render, verify, rebuild TrackerHub, commit, push, open the PR.
 #
-#   tracker-finish.sh --tracker-dir DIR [--title "..."] [--no-pr] [--no-push] [--keep]
+#   tracker-finish.sh --tracker-dir DIR [--work DIR] [--title "..."] [--no-pr] [--no-push] [--keep]
 #
 # Two commits are made on the branch: the tracker itself, then the TrackerHub
 # rebuild (its catalog pins the tracker's commit, so it cannot be the same
@@ -9,28 +9,32 @@
 # for the notes repository; pass --no-push to stop at the local commits.
 #
 # Guarantees:
-#   - runs only in a worktree recorded by tracker-begin.sh, never the live vault;
-#   - when TrackerHub exists, its work-vault sibling must be present and the hub
-#     build and check must pass before anything is pushed;
+#   - runs only in a wt.sh task worktree with an ownership record (as made by
+#     tracker-begin.sh), never the live vault;
+#   - when TrackerHub exists, the task's work-vault worktree must be present (and
+#     owned) and the hub build and check, given that worktree with --root, must
+#     pass before anything is pushed;
 #   - a PNG is either re-rendered by Inkscape or refused; a stale image never ships;
-#   - cleanup removes only owned worktrees, only after a push, only when clean,
-#     and never with --force.
+#   - it removes nothing: after the PR merges, finish the worktrees with wt.sh
+#     (finish, then check --for-removal and its non-forced removal plan).
+#     --keep is accepted for compatibility and changes nothing.
 set -euo pipefail
 
 skill_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 render="$skill_dir/scripts/render_tracker.py"
 tracker_dir=""
+work_vault=""
 title=""
 open_pr=1
 push=1
-keep=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --tracker-dir) tracker_dir="$2"; shift 2 ;;
+    --work) work_vault="$2"; shift 2 ;;
     --title) title="$2"; shift 2 ;;
     --no-pr) open_pr=0; shift ;;
     --no-push) push=0; open_pr=0; shift ;;
-    --keep) keep=1; shift ;;
+    --keep) shift ;;  # compatibility only: finish never removes worktrees
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
 done
@@ -38,14 +42,31 @@ done
 tracker_dir="$(cd "$tracker_dir" && pwd -P)"
 worktree="$(git -C "$tracker_dir" rev-parse --show-toplevel)"
 worktree="$(cd "$worktree" && pwd -P)"
-task="$(dirname "$worktree")"
-marker="$task/.tracker-worktrees"
-owned() { [ -f "$marker" ] && grep -qxF -- "$1" "$marker"; }
+task="$(basename "$worktree")"
+wt_root="$(dirname "$(dirname "$worktree")")"
+wt="${TRACKER_WT:-$skill_dir/../ai-scratch/scripts/wt.sh}"
+[ -x "$wt" ] || { printf 'wt.sh not found at %s; install the ai-scratch skill or set TRACKER_WT\n' "$wt" >&2; exit 2; }
+# shellcheck source=/dev/null
+. "$(dirname "$wt")/lib-scratch.sh"
+owners="$(scratch_owners_dir)"
+me="${WT_OWNER:-$(id -un)@$(hostname -s 2>/dev/null || hostname)}"
+# owned <worktree>: a linked worktree whose wt.sh ownership record names exactly this
+# path, belongs to this session (WT_OWNER, as wt.sh defines it) and is not released.
+owned() {
+  local w="$1" rec; rec="$owners/$(basename "$(dirname "$w")")/$(basename "$w").json"
+  [ -f "$w/.git" ] && [ -f "$rec" ] && python3 - "$rec" "$w" "$me" <<'PY'
+import json, os, sys
+rec = json.load(open(sys.argv[1]))
+ok = (os.path.realpath(rec.get('worktree', '')) == os.path.realpath(sys.argv[2])
+      and rec.get('owner_session') == sys.argv[3] and rec.get('released') is not True)
+sys.exit(0 if ok else 1)
+PY
+}
 
-if [ ! -f "$worktree/.git" ] || ! owned "$worktree"; then
+if ! owned "$worktree"; then
   # A linked worktree has a .git file; the live checkout has a .git directory.
-  # Either way, only a worktree tracker-begin.sh recorded may be finished.
-  printf 'refusing: %s is not a worktree created by tracker-begin.sh\n' "$worktree" >&2
+  # Either way, only a wt.sh task worktree with an ownership record may be finished.
+  printf 'refusing: %s is not a wt.sh task worktree with an unreleased ownership record owned by %s (run tracker-begin.sh)\n' "$worktree" "$me" >&2
   exit 2
 fi
 branch="$(git -C "$worktree" rev-parse --abbrev-ref HEAD)"
@@ -68,17 +89,17 @@ stem="$(basename "$state_file" -project-state.json)-project-mindmap"
 # When the hub exists, its sibling must be usable before anything is committed.
 hub="$worktree/Projects/TrackerHub/build.py"
 sibling=""
+hub_root=()
 if [ -f "$hub" ]; then
-  sibling="$(python3 - "$worktree/Projects/TrackerHub/config.json" "$worktree" <<'PY'
-import json, os, sys
-config, worktree = sys.argv[1], sys.argv[2]
-for repo in json.load(open(config))['repositories']:
-    if repo['repository'].endswith('/notes-work'):
-        print(os.path.normpath(os.path.join(worktree, 'Projects', 'TrackerHub', repo['root'])))
-        break
+  work_repo="$(python3 - "$worktree/Projects/TrackerHub/config.json" <<'PY'
+import json, sys
+print(next((r['repository'] for r in json.load(open(sys.argv[1]))['repositories'] if r['repository'].endswith('/notes-work')), ''))
 PY
 )"
-  if [ -z "$sibling" ] || [ ! -d "$sibling" ] || ! owned "$sibling"; then
+  work_vault="${work_vault:-${TRACKER_WORK_REPO:-$HOME/Obsidian/Work}}"
+  [ -d "$work_vault" ] && sibling="$wt_root/$(basename "$(cd "$work_vault" && pwd -P)")/$task"
+  hub_root=(--root "$work_repo=$sibling")
+  if [ -z "$work_repo" ] || [ -z "$sibling" ] || [ ! -d "$sibling" ] || ! owned "$sibling"; then
     printf 'TrackerHub exists but its work-vault sibling is missing or not owned (%s); run tracker-begin.sh again\n' "${sibling:-unset}" >&2
     exit 1
   fi
@@ -126,8 +147,8 @@ tracker_commit="$(git -C "$worktree" rev-parse --short HEAD)"
 
 hub_commit=""
 if [ -f "$hub" ]; then
-  (cd "$worktree" && python3 "$hub")
-  (cd "$worktree" && python3 "$hub" --check)
+  (cd "$worktree" && python3 "$hub" "${hub_root[@]}")
+  (cd "$worktree" && python3 "$hub" --check "${hub_root[@]}")
   git -C "$worktree" add -A -- Projects/TrackerHub/catalog.json tracker-mindmaps.html
   if ! git -C "$worktree" diff --cached --quiet; then
     git -C "$worktree" commit -q -m "docs: Rebuild TrackerHub With The $project Tracker"
@@ -150,7 +171,6 @@ if [ "$push" -eq 1 ]; then
         if [ -n "$hub_commit" ]; then
           printf -- '- TrackerHub rebuilt (`build.py --check` passes).\n'
         fi
-        printf '\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n'
       } > "$body_file"
       url="$(cd "$worktree" && gh pr create --base "$default" --head "$branch" --title "$title" --body-file "$body_file")"
       rm -f "$body_file"
@@ -159,31 +179,12 @@ if [ "$push" -eq 1 ]; then
   fi
 fi
 
-# Cleanup is opt-out, post-push only, owned worktrees only, clean only, never forced.
-if [ "$keep" -eq 0 ] && [ "$push" -eq 1 ]; then
-  kept=0
-  task_real="$(cd "$task" && pwd -P)"
-  while IFS= read -r wt; do
-    [ -d "$wt" ] || continue
-    wt_real="$(cd "$wt" && pwd -P)"
-    case "$wt_real" in
-      "$task_real"/*) ;;
-      *) printf 'keeping %s: it resolves outside the task directory\n' "$wt" >&2; kept=1; continue ;;
-    esac
-    if [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then
-      printf 'keeping %s: it has uncommitted or untracked changes\n' "$wt" >&2
-      kept=1
-      continue
-    fi
-    repo="$(dirname "$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir)")"
-    if ! git -C "$repo" worktree remove "$wt" 2>/dev/null; then
-      printf 'keeping %s: git refused to remove it\n' "$wt" >&2
-      kept=1
-    fi
-  done < "$marker"
-  if [ "$kept" -eq 0 ]; then
-    rm -f "$marker"
-    rmdir "$task" 2>/dev/null || true
-  fi
-fi
+# Nothing is removed here. The worktrees stay until the PR merges; then wt.sh
+# records completion and release and prints the verified, non-forced removal plan.
+printf 'NEXT: after the PR merges, finish each task worktree with wt.sh (nothing was removed):\n'
+for w in "$worktree" ${sibling:+"$sibling"}; do
+  v="$(git -C "$w" rev-parse --path-format=absolute --git-common-dir)"; v="${v%/.git}"
+  printf '  WT_PRIMARIES=%q %q finish %q %q --pr <url> --release\n' "$(dirname "$v")" "$wt" "$(basename "$(dirname "$w")")" "$task"
+  printf '  WT_PRIMARIES=%q %q check  %q %q --for-removal\n' "$(dirname "$v")" "$wt" "$(basename "$(dirname "$w")")" "$task"
+done
 exit 0
