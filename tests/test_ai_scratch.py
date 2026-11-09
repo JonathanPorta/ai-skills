@@ -17,6 +17,10 @@ import sys
 import subprocess
 import tempfile
 import unittest
+try:
+    from tests._fixtures import mkdtemp
+except ImportError:  # discovered with -s tests: the tests dir itself is on sys.path
+    from _fixtures import mkdtemp
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skills" / "ai-scratch" / "scripts"
@@ -28,7 +32,7 @@ OLD = "202601010000"
 def run(script: Path, *args: str, env_extra: dict | None = None, timeout: int = 60):
     env = dict(os.environ)
     if "AI_SCRATCH_CONFIG_DIR" not in env:
-        cfg = tempfile.mkdtemp(prefix="scratch-cfg-")
+        cfg = mkdtemp(prefix="scratch-cfg-")
         # Isolate from the operator's real ownership records (default ~/devel/worktrees/.owners).
         (Path(cfg) / "config").write_text(f"AI_SCRATCH_OWNERS = {cfg}/no-owners\n")
         env["AI_SCRATCH_CONFIG_DIR"] = cfg
@@ -63,7 +67,7 @@ def backdate(root: Path) -> None:
 
 class ScratchFixture(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = Path(tempfile.mkdtemp(prefix="scratch-test-"))
+        self.tmp = Path(mkdtemp(prefix="scratch-test-"))
         # Two levels deep so the root passes the component-count safety rule.
         self.root = self.tmp / "a" / "b" / "root"
         self.root.mkdir(parents=True)
@@ -73,7 +77,7 @@ class ScratchFixture(unittest.TestCase):
         # (default ~/devel/worktrees/.owners) are never consulted.
         self.owners = self.tmp / "owners"
         self.owners.mkdir()
-        self.cfg = tempfile.mkdtemp(prefix="scratch-cfg-")
+        self.cfg = mkdtemp(prefix="scratch-cfg-")
         self.write_config()
         self.env = {"AI_SCRATCH_CONFIG_DIR": self.cfg}
 
@@ -289,7 +293,7 @@ class TestRootIdentityAndOptions(ScratchFixture):
         self.assertIn("absolute path", result.stderr)
 
     def test_canonical_form_is_persisted_not_the_input(self):
-        cfg_dir = tempfile.mkdtemp(prefix="scratch-cfg-")
+        cfg_dir = mkdtemp(prefix="scratch-cfg-")
         target = self.tmp / "link-target"
         target.mkdir()
         link = self.tmp / "via-link"
@@ -356,7 +360,7 @@ class TestFailClosedDiscovery(ScratchFixture):
         self.assertNotIn("FREE  bare", self.sweep().stdout)
 
     def test_protected_name_containing_a_space_is_honoured(self):
-        cfg = tempfile.mkdtemp(prefix="scratch-cfg-")
+        cfg = mkdtemp(prefix="scratch-cfg-")
         (self.root / "space name").mkdir()
         backdate(self.root)
         run(SETUP, "--protect", "space name", env_extra={"AI_SCRATCH_CONFIG_DIR": cfg})

@@ -16,6 +16,10 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+try:
+    from tests._fixtures import mkdtemp
+except ImportError:  # discovered with -s tests: the tests dir itself is on sys.path
+    from _fixtures import mkdtemp
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skills" / "ai-scratch" / "scripts"
@@ -31,7 +35,7 @@ def git(cwd: Path, *args: str) -> str:
 
 class WtFixture(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = Path(tempfile.mkdtemp(prefix="wt-test-"))
+        self.tmp = Path(mkdtemp(prefix="wt-test-"))
         self.cfg = self.tmp / "cfg"
         self.cfg.mkdir()
         self.owners = self.tmp / "owners"
@@ -253,6 +257,35 @@ class TestListAndFinish(WtFixture):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertNotIn("0000000000000000000000000000000000000000", r.stdout + r.stderr)
         self.assertIn('"released": true', self.record())
+
+    def test_an_old_side_only_reflog_commit_still_blocks_release_until_preserved(self):
+        wt, _ = self.start()
+        self.commit_in(wt, "lost")                       # A: committed, never pushed
+        lost = git(wt, "rev-parse", "HEAD")
+        git(wt, "reset", "-q", "--hard", "HEAD~1")        # HEAD moves back to the landed base
+        self.land(wt)
+        # Rewrite the private reflog so A appears only on the OLD side of an entry that
+        # went through the all-zero marker (the entry that reached A has expired).
+        log = Path(git(wt, "rev-parse", "--absolute-git-dir")) / "logs" / "HEAD"
+        head = git(wt, "rev-parse", "HEAD")
+        log.write_text(
+            f"{lost} {'0' * 40} Test <t@example.invalid> 1700000000 +0000\tcheckout: moving to unborn\n"
+            f"{'0' * 40} {head} Test <t@example.invalid> 1700000001 +0000\tcheckout: moving back\n")
+        r = self.wt("finish", "demo", "task1", "--release")
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(lost, r.stdout + r.stderr)
+        self.assertIn("NOT released", r.stdout + r.stderr)
+        r = self.wt("check", "demo", "task1", "--for-removal")
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        # preserve it the way finish prescribes, then both gates pass
+        git(self.primary, "update-ref", "refs/keep/task1-lost", lost)
+        bundle = self.tmp / "lost.bundle"
+        git(self.primary, "bundle", "create", str(bundle), "refs/keep/task1-lost")
+        r = self.wt("finish", "demo", "task1", "--release", "--bundle", str(bundle))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('"released": true', self.record())
+        r = self.wt("check", "demo", "task1", "--for-removal")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def test_a_merged_pr_head_alone_is_not_preservation(self):
         # Squash-merge shape: the branch was pushed, the PR merged, the remote
@@ -597,6 +630,43 @@ class TestListAndFinish(WtFixture):
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
         self.assertIn("~/.ai-scratch/config", r.stderr)
         self.assertFalse(Path("/tmp/from-config").exists())
+
+    def test_dot_dot_through_missing_components_cannot_escape_the_guards(self):
+        allowed = self.tmp / "allowed"; allowed.mkdir()
+        cases = {
+            "primaries via ..": f"{allowed}/missing/../../portaj/worktrees",
+            "temp via ..": f"{allowed}/missing/../../../../../../../tmp/x",
+            "dot component": f"{allowed}/missing/./x",
+        }
+        for name, root in cases.items():
+            with self.subTest(case=name):
+                env = dict(os.environ, AI_SCRATCH_CONFIG_DIR=str(self.cfg), WT_ROOT=root,
+                           WT_PRIMARIES=str(self.primaries), WT_OWNER="session-A")
+                r = subprocess.run(["bash", str(WT), "start", "demo", "tx", "--no-fetch"], capture_output=True, text=True, env=env)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("unresolvable", r.stderr)
+                self.assertFalse((allowed / "missing").exists())
+                self.assertFalse((self.primaries / "worktrees").exists())
+        # a symlink alias of the primaries directory is seen through
+        alias = self.tmp / "alias"; alias.symlink_to(self.primaries)
+        env = dict(os.environ, AI_SCRATCH_CONFIG_DIR=str(self.cfg), WT_ROOT=str(alias / "worktrees"),
+                   WT_PRIMARIES=str(self.primaries), WT_OWNER="session-A")
+        r = subprocess.run(["bash", str(WT), "list"], capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("beside or inside the canonical checkouts", r.stderr)
+        # and the same via the config file
+        (self.cfg / "config").write_text(f"AI_SCRATCH_OWNERS = {self.owners}\nWT_ROOT = {allowed}/missing/../../portaj/worktrees\n")
+        env = dict(os.environ, AI_SCRATCH_CONFIG_DIR=str(self.cfg), WT_PRIMARIES=str(self.primaries), WT_OWNER="session-A")
+        env.pop("WT_ROOT", None)
+        r = subprocess.run(["bash", str(WT), "list"], capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        # allowed control: a not-yet-existing plain root under the fixture works
+        env = dict(os.environ, AI_SCRATCH_CONFIG_DIR=str(self.cfg), WT_ROOT=str(allowed / "new" / "portaj"),
+                   WT_PRIMARIES=str(self.primaries), WT_OWNER="session-A")
+        (self.cfg / "config").write_text(f"AI_SCRATCH_OWNERS = {self.owners}\n")
+        r = subprocess.run(["bash", str(WT), "start", "demo", "ok1", "--no-fetch"], capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertTrue((allowed / "new" / "portaj" / "demo" / "ok1").is_dir())
 
     def test_a_missing_but_registered_worktree_is_reported_not_recreated(self):
         path, _ = self.start()

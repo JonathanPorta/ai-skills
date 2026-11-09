@@ -51,19 +51,22 @@ OWNERS_DIR="$(scratch_owners_dir)"
 # canonical checkouts (that is the human's directory). Refuse before any command runs, so a bad
 # WT_ROOT in the environment or the config is a reported configuration problem, never a silent
 # placement. The nearest existing ancestor gives the physical path when the root does not exist yet.
-physical_prefix() {  # <path> -> physical path of its deepest existing ancestor + the rest
-  local p="$1" rest=""
-  while [ ! -e "$p" ] && [ "$p" != / ]; do rest="/$(basename "$p")$rest"; p="$(dirname "$p")"; done
+physical_prefix() {  # <label> <path> -> physical path of its deepest existing ancestor + the rest
+  # The existing part is resolved physically (symlinks followed). The part that does not exist
+  # yet cannot be resolved, so it may not contain `.` or `..` components: "allowed/missing/../.."
+  # would otherwise walk back out of the allowed prefix after the check. Fail closed.
+  local label="$1" p="$2" rest="" c
+  while [ ! -e "$p" ] && [ "$p" != / ]; do c="$(basename "$p")"; case "$c" in .|..) printf 'wt: %s %s has an unresolvable "%s" component below a directory that does not exist yet; give a plain absolute path\n' "$label" "$2" "$c" >&2; exit 2;; esac; rest="/$c$rest"; p="$(dirname "$p")"; done
   printf '%s%s' "$(cd -P -- "$p" 2>/dev/null && pwd -P)" "$rest"
 }
 refuse_root() {  # <label> <path>
-  local real; real="$(physical_prefix "$2")"
+  local real; real="$(physical_prefix "$1" "$2")" || exit 2
   for t in /tmp /private/tmp /var/tmp /private/var/tmp; do
     case "$real" in "$t"|"$t"/*) printf 'wt: %s %s resolves to %s, under the temp directory %s; source worktrees are never placed there (set %s in ~/.ai-scratch/config)\n' "$1" "$2" "$real" "$t" "$1" >&2; exit 2;; esac
   done
 }
 refuse_root WT_ROOT "$WT_ROOT"
-_root_real="$(physical_prefix "$WT_ROOT")"; _prim_real="$(physical_prefix "$WT_PRIMARIES")"
+_root_real="$(physical_prefix WT_ROOT "$WT_ROOT")" || exit 2; _prim_real="$(physical_prefix WT_PRIMARIES "$WT_PRIMARIES")" || exit 2
 case "$_root_real" in "$_prim_real"|"$_prim_real"/*) printf 'wt: WT_ROOT %s is the primaries directory %s or inside it; task worktrees never sit beside or inside the canonical checkouts\n' "$WT_ROOT" "$WT_PRIMARIES" >&2; exit 2;; esac
 case "$_prim_real" in "$_root_real"/*) printf 'wt: WT_PRIMARIES %s is inside WT_ROOT %s; refusing\n' "$WT_PRIMARIES" "$WT_ROOT" >&2; exit 2;; esac
 unset _root_real _prim_real
@@ -294,10 +297,13 @@ assess_preservation() {  # <wt> <primary> <bundle-path-or-empty> <recorded-bundl
   ASSESS_REQUIRED="$head"
   if [ -n "$adm" ] && [ -f "$adm/logs/HEAD" ]; then
     [ -r "$adm/logs/HEAD" ] || { ASSESS_ERROR="cannot read the private reflog $adm/logs/HEAD"; return 1; }
-    for s in $(cut -d' ' -f2 "$adm/logs/HEAD" | sort -u); do
-      # The all-zero id is git's "no object" marker (a reflog entry written while HEAD
-      # pointed at an unborn or deleted branch); it is not history and can never be preserved.
+    # Both sides of every entry: a commit HEAD moved away from (old side) may appear on no
+    # new side when the entry that reached it has expired or when the move went through the
+    # all-zero marker. The all-zero id itself is git's "no object" marker (HEAD on an unborn
+    # or deleted branch); it is not history and can never be preserved, so it is skipped.
+    for s in $(LC_ALL=C awk '{ print $1; print $2 }' "$adm/logs/HEAD" | sort -u); do
       case "$s" in *[!0]*) ;; *) continue;; esac
+      g -C "$wt" cat-file -e "$s^{commit}" 2>/dev/null || continue
       case " $ASSESS_REQUIRED " in *" $s "*) ;; *) ASSESS_REQUIRED="$ASSESS_REQUIRED $s";; esac
     done
   fi
