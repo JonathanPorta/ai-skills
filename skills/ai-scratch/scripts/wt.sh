@@ -46,6 +46,27 @@ WT_PRIMARIES="$(expand_dir "${WT_PRIMARIES:-$(scratch_config_get WT_PRIMARIES)}"
 WT_BRANCH_PREFIX="${WT_BRANCH_PREFIX:-$(scratch_config_get WT_BRANCH_PREFIX)}"; WT_BRANCH_PREFIX="${WT_BRANCH_PREFIX:-jp/f/}"
 WT_BUNDLES="$(expand_dir "${WT_BUNDLES:-$(scratch_config_get WT_BUNDLES)}" "$HOME/devel/recovery/bundles" WT_BUNDLES)" || exit 2
 OWNERS_DIR="$(scratch_owners_dir)"
+
+# Source worktrees never belong under a temp directory (the OS purges it) or beside or inside the
+# canonical checkouts (that is the human's directory). Refuse before any command runs, so a bad
+# WT_ROOT in the environment or the config is a reported configuration problem, never a silent
+# placement. The nearest existing ancestor gives the physical path when the root does not exist yet.
+physical_prefix() {  # <path> -> physical path of its deepest existing ancestor + the rest
+  local p="$1" rest=""
+  while [ ! -e "$p" ] && [ "$p" != / ]; do rest="/$(basename "$p")$rest"; p="$(dirname "$p")"; done
+  printf '%s%s' "$(cd -P -- "$p" 2>/dev/null && pwd -P)" "$rest"
+}
+refuse_root() {  # <label> <path>
+  local real; real="$(physical_prefix "$2")"
+  for t in /tmp /private/tmp /var/tmp /private/var/tmp; do
+    case "$real" in "$t"|"$t"/*) printf 'wt: %s %s resolves to %s, under the temp directory %s; source worktrees are never placed there (set %s in ~/.ai-scratch/config)\n' "$1" "$2" "$real" "$t" "$1" >&2; exit 2;; esac
+  done
+}
+refuse_root WT_ROOT "$WT_ROOT"
+_root_real="$(physical_prefix "$WT_ROOT")"; _prim_real="$(physical_prefix "$WT_PRIMARIES")"
+case "$_root_real" in "$_prim_real"|"$_prim_real"/*) printf 'wt: WT_ROOT %s is the primaries directory %s or inside it; task worktrees never sit beside or inside the canonical checkouts\n' "$WT_ROOT" "$WT_PRIMARIES" >&2; exit 2;; esac
+case "$_prim_real" in "$_root_real"/*) printf 'wt: WT_PRIMARIES %s is inside WT_ROOT %s; refusing\n' "$WT_PRIMARIES" "$WT_ROOT" >&2; exit 2;; esac
+unset _root_real _prim_real
 export GIT_OPTIONAL_LOCKS=0 GIT_NO_LAZY_FETCH=1
 g() { git -c core.fsmonitor=false -c gc.auto=0 "$@"; }
 

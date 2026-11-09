@@ -547,6 +547,42 @@ class TestListAndFinish(WtFixture):
         self.assertFalse((self.primary / "tf").exists())
         self.assertEqual(git(self.primary, "status", "--porcelain"), "")
 
+    def test_a_worktree_root_under_a_temp_directory_is_refused_as_configuration(self):
+        for root in ("/tmp/wt-root-test", "/private/tmp/wt-root-test", "/var/tmp/wt-root-test"):
+            with self.subTest(root=root):
+                env = dict(os.environ, AI_SCRATCH_CONFIG_DIR=str(self.cfg), WT_ROOT=root,
+                           WT_PRIMARIES=str(self.primaries), WT_OWNER="session-A")
+                for cmd in (["start", "demo", "tt", "--no-fetch"], ["list"]):
+                    r = subprocess.run(["bash", str(WT), *cmd], capture_output=True, text=True, env=env)
+                    self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                    self.assertIn("temp directory", r.stderr)
+                    self.assertIn("WT_ROOT", r.stderr)
+                self.assertFalse(Path(root).exists())
+        self.assertEqual(git(self.primary, "status", "--porcelain"), "")
+
+    def test_a_worktree_root_inside_the_primaries_directory_is_refused_before_any_command(self):
+        inside = self.primaries / "worktrees"
+        env = dict(os.environ, AI_SCRATCH_CONFIG_DIR=str(self.cfg), WT_ROOT=str(inside),
+                   WT_PRIMARIES=str(self.primaries), WT_OWNER="session-A")
+        r = subprocess.run(["bash", str(WT), "list"], capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("beside or inside the canonical checkouts", r.stderr)
+        self.assertFalse(inside.exists())
+        # and the other way round
+        env["WT_ROOT"] = str(self.tmp)
+        r = subprocess.run(["bash", str(WT), "list"], capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("inside WT_ROOT", r.stderr)
+
+    def test_a_temp_root_set_in_the_config_file_is_refused_too(self):
+        (self.cfg / "config").write_text(f"AI_SCRATCH_OWNERS = {self.owners}\nWT_ROOT = /tmp/from-config\n")
+        env = dict(os.environ, AI_SCRATCH_CONFIG_DIR=str(self.cfg), WT_PRIMARIES=str(self.primaries), WT_OWNER="session-A")
+        env.pop("WT_ROOT", None)
+        r = subprocess.run(["bash", str(WT), "start", "demo", "tc", "--no-fetch"], capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("~/.ai-scratch/config", r.stderr)
+        self.assertFalse(Path("/tmp/from-config").exists())
+
     def test_a_missing_but_registered_worktree_is_reported_not_recreated(self):
         path, _ = self.start()
         shutil.rmtree(path)
