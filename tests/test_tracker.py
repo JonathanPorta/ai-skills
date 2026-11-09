@@ -18,6 +18,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+try:
+    from tests._fixtures import mkdtemp
+except ImportError:  # discovered with -s tests: the tests dir itself is on sys.path
+    from _fixtures import mkdtemp
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL = ROOT / "skills" / "tracker"
@@ -37,7 +41,7 @@ def run(script: Path, *args: str) -> subprocess.CompletedProcess:
 
 class TrackerFixture(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = Path(tempfile.mkdtemp(prefix="tracker-"))
+        self.tmp = Path(mkdtemp(prefix="tracker-"))
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.dir = self.tmp / "Tracker"
         shutil.copytree(EXAMPLE, self.dir)
@@ -245,11 +249,13 @@ class WorkflowFixture(unittest.TestCase):
     """A disposable notes vault (with origin and a stub TrackerHub) and a work vault."""
 
     def setUp(self) -> None:
-        self.tmp = Path(tempfile.mkdtemp(prefix="tracker-wf-")).resolve()
+        self.tmp = Path(mkdtemp(prefix="tracker-wf-")).resolve()
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.origin = self.tmp / "origin.git"
         subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(self.origin)], check=True)
-        self.notes = self.tmp / "notes"
+        # The vaults sit in their own parent: wt.sh refuses a worktree root inside the
+        # primaries directory, and tracker-begin sets WT_PRIMARIES to the vault's parent.
+        self.notes = self.tmp / "vaults" / "notes"
         new_repo(self.notes)
         hub = self.notes / "Projects" / "TrackerHub"
         hub.mkdir(parents=True)
@@ -263,7 +269,7 @@ class WorkflowFixture(unittest.TestCase):
         git(self.notes, "remote", "add", "origin", str(self.origin))
         git(self.notes, "push", "-q", "-u", "origin", "main")
         git(self.notes, "remote", "set-head", "origin", "main")
-        self.work = self.tmp / "work"
+        self.work = self.tmp / "vaults" / "work"
         new_repo(self.work)
         (self.work / "note.md").write_text("work\n")
         git(self.work, "add", "-A")
@@ -464,7 +470,7 @@ class MigrationTests(unittest.TestCase):
     }
 
     def setUp(self) -> None:
-        self.tmp = Path(tempfile.mkdtemp(prefix="tracker-mig-")).resolve()
+        self.tmp = Path(mkdtemp(prefix="tracker-mig-")).resolve()
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.dir = self.tmp / "Projects" / "Example" / "Tracker"
         (self.dir / "templates").mkdir(parents=True)
