@@ -295,6 +295,9 @@ assess_preservation() {  # <wt> <primary> <bundle-path-or-empty> <recorded-bundl
   if [ -n "$adm" ] && [ -f "$adm/logs/HEAD" ]; then
     [ -r "$adm/logs/HEAD" ] || { ASSESS_ERROR="cannot read the private reflog $adm/logs/HEAD"; return 1; }
     for s in $(cut -d' ' -f2 "$adm/logs/HEAD" | sort -u); do
+      # The all-zero id is git's "no object" marker (a reflog entry written while HEAD
+      # pointed at an unborn or deleted branch); it is not history and can never be preserved.
+      case "$s" in *[!0]*) ;; *) continue;; esac
       case " $ASSESS_REQUIRED " in *" $s "*) ;; *) ASSESS_REQUIRED="$ASSESS_REQUIRED $s";; esac
     done
   fi

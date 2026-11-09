@@ -239,6 +239,21 @@ class TestListAndFinish(WtFixture):
         return dict(os.environ, AI_SCRATCH_CONFIG_DIR=str(self.cfg), WT_ROOT=str(self.wt_root),
                     WT_PRIMARIES=str(self.primaries), WT_OWNER="session-A", PATH=f"{shim}{os.pathsep}{os.environ['PATH']}")
 
+    def test_the_null_object_id_in_the_private_reflog_is_not_required_history(self):
+        wt, _ = self.start()
+        self.land(wt)
+        # A reflog entry whose new side is the all-zero id (HEAD moved to an unborn branch and
+        # back) must not make the worktree unreleasable: there is nothing to preserve.
+        log = Path(git(wt, "rev-parse", "--absolute-git-dir")) / "logs" / "HEAD"
+        head = git(wt, "rev-parse", "HEAD")
+        with log.open("a") as fh:
+            fh.write(f"{head} {'0' * 40} Test <t@example.invalid> 1700000000 +0000\tcheckout: moving to unborn\n")
+            fh.write(f"{'0' * 40} {head} Test <t@example.invalid> 1700000001 +0000\tcheckout: moving back\n")
+        r = self.wt("finish", "demo", "task1", "--release")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("0000000000000000000000000000000000000000", r.stdout + r.stderr)
+        self.assertIn('"released": true', self.record())
+
     def test_a_merged_pr_head_alone_is_not_preservation(self):
         # Squash-merge shape: the branch was pushed, the PR merged, the remote
         # branch deleted; the commits survive only through refs/pull/N/head.
