@@ -57,7 +57,11 @@ physical_prefix() {  # <label> <path> -> physical path of its deepest existing a
   # would otherwise walk back out of the allowed prefix after the check. Fail closed.
   local label="$1" p="$2" rest="" c
   while [ ! -e "$p" ] && [ "$p" != / ]; do c="$(basename "$p")"; case "$c" in .|..) printf 'wt: %s %s has an unresolvable "%s" component below a directory that does not exist yet; give a plain absolute path\n' "$label" "$2" "$c" >&2; exit 2;; esac; rest="/$c$rest"; p="$(dirname "$p")"; done
-  printf '%s%s' "$(cd -P -- "$p" 2>/dev/null && pwd -P)" "$rest"
+  local base; base="$(cd -P -- "$p" 2>/dev/null && pwd -P)"
+  # The nearest existing ancestor may be "/" itself (Linux has no /private); joining it naively
+  # yields "//private/tmp/...", which no single-slash prefix check would match.
+  [ "$base" = / ] && [ -n "$rest" ] && base=""
+  printf '%s%s' "$base" "$rest"
 }
 refuse_root() {  # <label> <path>
   local real; real="$(physical_prefix "$1" "$2")" || exit 2

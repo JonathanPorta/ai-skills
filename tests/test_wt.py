@@ -608,6 +608,25 @@ class TestListAndFinish(WtFixture):
                 self.assertFalse(Path(root).exists())
         self.assertEqual(git(self.primary, "status", "--porcelain"), "")
 
+    def test_a_missing_top_level_prefix_resolves_to_a_single_slash_path(self):
+        # On Linux /private does not exist, so the nearest existing ancestor of
+        # /private/tmp/x is "/" and a naive join produced "//private/tmp/x", which no
+        # single-slash temp prefix matched. Exercise the resolver function directly with
+        # a prefix that is missing on every platform.
+        func = subprocess.run(
+            ["sed", "-n", "/^physical_prefix() {/,/^}/p", str(WT)], capture_output=True, text=True
+        ).stdout
+        self.assertIn("printf", func)
+        missing = f"/wt-missing-top-{os.getpid()}/private/tmp/x"
+        r = subprocess.run(["bash", "-c", func + '\nphysical_prefix WT_ROOT "$1"', "_", missing],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, missing)
+        self.assertNotIn("//", r.stdout)
+        # the root itself still resolves to "/"
+        r = subprocess.run(["bash", "-c", func + '\nphysical_prefix WT_ROOT /'], capture_output=True, text=True)
+        self.assertEqual(r.stdout, "/")
+
     def test_a_worktree_root_inside_the_primaries_directory_is_refused_before_any_command(self):
         inside = self.primaries / "worktrees"
         env = dict(os.environ, AI_SCRATCH_CONFIG_DIR=str(self.cfg), WT_ROOT=str(inside),
