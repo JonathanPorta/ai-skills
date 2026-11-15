@@ -749,7 +749,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Tracker state",
-  "description": "State for the configurable-workstream EBCD-format map. This schema validates shape; renderer validation also checks dates, safe evidence URLs, and exact template fields.",
+  "description": "State for the configurable-workstream Example-format map. This schema validates shape; renderer validation also checks dates, safe evidence URLs, and exact template fields.",
   "$defs": {
     "githubIssues": {
       "type": "array",

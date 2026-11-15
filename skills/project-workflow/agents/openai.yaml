@@ -1,0 +1,6 @@
+interface:
+  display_name: Project Workflow
+  short_description: Maintain numbered assignments and evidence-backed handoffs
+  default_prompt: "Use $project-workflow to reconcile this project notes workspace, prepare the next bounded assignment, and record results for independent review."
+policy:
+  allow_implicit_invocation: true
