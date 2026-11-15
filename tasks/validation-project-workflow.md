@@ -1,5 +1,24 @@
 # Project workflow validation
 
+## Review follow-up: F1, legacy Bash hub invocation
+
+The review of `d829699` found that expanding an empty `hub_root` array under
+`set -u` aborts on Bash 3.2. Both macOS matrix jobs failed in run
+`43728153495`; the Linux-only local checks did not establish macOS portability.
+
+Validation plan: preserve zero `--root` arguments for a local-only hub, preserve
+the exact companion mapping when present, and exercise finish without a hub.
+Make the test hub reject unexpected/empty arguments. Select `/bin/bash` explicitly
+on macOS so another Bash installation cannot mask the supported-shell regression.
+Run the tracker checks and canonical suite locally, then require successful macOS
+Python 3.10 and 3.14 jobs on the corrected PR head. Do not merge as part of this fix.
+
+The correction uses an always-nonempty hub command array. The strengthened
+38-test tracker suite passes locally on Bash 5.2, including exact argument checks
+for local and companion hubs and finish without a hub. Independent diff review,
+skill validation, shell syntax and whitespace checks pass. Consult the corrected
+PR head's checks for the required macOS proof; Linux success alone is insufficient.
+
 ## Independent handoff exercise
 
 A fresh reviewer received only the reusable skill, a fictional project folder,

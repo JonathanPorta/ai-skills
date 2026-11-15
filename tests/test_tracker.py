@@ -208,10 +208,15 @@ class ScaffoldTests(TrackerFixture):
 
 
 HUB_STUB = """#!/usr/bin/env python3
-import json, pathlib, sys
+import argparse, json, pathlib, sys
+parser = argparse.ArgumentParser()
+parser.add_argument('--check', action='store_true')
+parser.add_argument('--root', action='append', default=[])
+args = parser.parse_args()
+print('HUB_ARGS=' + json.dumps(sys.argv[1:]))
 root = pathlib.Path(__file__).resolve().parents[2]
 config = json.loads((root / 'Projects' / 'TrackerHub' / 'config.json').read_text())
-roots = dict(a.split('=', 1) for a in sys.argv[sys.argv.index('--root') + 1:sys.argv.index('--root') + 2]) if '--root' in sys.argv else {}
+roots = dict(a.split('=', 1) for a in args.root)
 work = root
 if len(config['repositories']) > 1:
     work = pathlib.Path(roots.get(config['repositories'][1]['repository']) or (root / 'Projects' / 'TrackerHub' / config['repositories'][1]['root'])).resolve()
@@ -220,7 +225,7 @@ if not work.is_dir():
     raise SystemExit(1)
 maps = sorted(str(p.relative_to(root)) for p in root.rglob('*mindmap.html') if 'Tracker' in p.parts)
 catalog = json.dumps({'maps': maps}, indent=1) + '\\n'
-if '--check' in sys.argv:
+if args.check:
     if (root / 'Projects' / 'TrackerHub' / 'catalog.json').read_text() != catalog:
         raise SystemExit('stale')
     print('Checked %d maps' % len(maps))
@@ -292,7 +297,9 @@ class WorkflowFixture(unittest.TestCase):
         env = dict(self.env)
         if env_extra:
             env.update(env_extra)
-        return subprocess.run(["bash", str(script), *args], capture_output=True, text=True, timeout=120, env=env)
+        # Exercise the supported system shell even if a newer Bash is on PATH.
+        shell = "/bin/bash" if sys.platform == "darwin" else "bash"
+        return subprocess.run([shell, str(script), *args], capture_output=True, text=True, timeout=120, env=env)
 
     def begin(self) -> dict:
         result = self.run_script(BEGIN, "--project", "Example", "--date", "2026-11-03")
@@ -329,6 +336,10 @@ class WorkflowTests(WorkflowFixture):
         self.assertEqual(log.splitlines(), ["docs: Rebuild TrackerHub With The Example Tracker",
                                             "docs: Update The Example Project Tracker", "seed"])
         self.assertIn("HUB_COMMIT=", result.stdout)
+        hub_calls = [json.loads(line.removeprefix('HUB_ARGS='))
+                     for line in result.stdout.splitlines() if line.startswith('HUB_ARGS=')]
+        root_args = ['--root', 'X/shared-notes=' + out['TRACKER_WORK_SIBLING']]
+        self.assertEqual(hub_calls, [root_args, root_args + ['--check']])
         self.assertTrue(worktree.exists(), "finish never removes worktrees")
         self.assertIn("wt.sh finish", result.stdout)
 
@@ -452,6 +463,11 @@ class PortableWorkflowTests(WorkflowFixture):
         self.change_state(Path(out['TRACKER_DIR']))
         result = self.run_script(FINISH, '--tracker-dir', out['TRACKER_DIR'], '--no-push')
         self.assertEqual(result.returncode, 0, result.stderr)
+        hub_calls = [json.loads(line.removeprefix('HUB_ARGS='))
+                     for line in result.stdout.splitlines() if line.startswith('HUB_ARGS=')]
+        self.assertEqual(hub_calls, [[], ['--check']], 'a local-only hub receives no root argument')
+        self.assertIn('HUB_COMMIT=', result.stdout)
+        self.assertEqual(git(Path(out['TRACKER_WORKTREE']), 'status', '--porcelain'), '')
         shutil.rmtree(hub)
         git(self.notes, 'add', '-A')
         git(self.notes, 'commit', '-qm', 'no hub')
@@ -459,6 +475,13 @@ class PortableWorkflowTests(WorkflowFixture):
         result = self.run_script(BEGIN, '--project', 'Example', '--date', '2026-11-04')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('TRACKER_WORK_SIBLING=', result.stdout)
+        no_hub = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
+        self.change_state(Path(no_hub['TRACKER_DIR']))
+        result = self.run_script(FINISH, '--tracker-dir', no_hub['TRACKER_DIR'], '--no-push')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('TRACKER_COMMIT=', result.stdout)
+        self.assertNotIn('HUB_COMMIT=', result.stdout)
+        self.assertNotIn('HUB_ARGS=', result.stdout)
 
     def test_explicit_missing_or_escaping_config_fails_before_worktree_creation(self):
         result = self.run_script(BEGIN, '--project', 'Example', '--config', str(self.tmp / 'absent.json'))
