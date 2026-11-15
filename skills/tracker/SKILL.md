@@ -1,184 +1,110 @@
 ---
 name: tracker
-description: Add or refresh a project's status tracker in the operator's Obsidian notes repository — a schema-2 JSON state rendered into one self-contained HTML/SVG mind map with six stage indicators per workstream and five acceptance gates — and deliver it as a PR to the notes repo. Use when the user says /tracker, update the tracker, add a tracker for this project, refresh my notes tracker, or asks where a project stands and wants it recorded in their notes. Infers the project from the current repository.
+description: "Create or refresh a project's evidence-backed status tracker in a notes repository, preserving its design and six independent work stages, validate rendered views, rebuild an optional tracker hub, and prepare a reviewable change. Use for create or update the tracker, refresh my notes tracker, or record where this project stands. Resolve the project and notes location from the request and repository configuration."
 ---
 
-# /tracker — project tracker in the notes repo
+# Project tracker
 
-One tracker per project lives at `Projects/<Name>/Tracker/` in the operator's
-notes repository (default `~/Obsidian/Personal`, GitHub `JonathanPorta/notes-personal`).
-The tracker directory holds **state, not code**:
+Keep one tracker per project in `<projects_dir>/<Name>/Tracker/`. Read repository
+instructions and project entry points before making changes. Preserve existing
+project structure, state schema, rendering design, task IDs and historical evidence.
+The tracker directory holds state and generated views; the renderer stays in this
+skill. Read `assets/example/` for a complete generic schema-2 example.
 
-```
-Projects/<Name>/Tracker/
-  config.json                    workstream_count, project, slug, ref_label, issues_label
-  <slug>-project-state.json      the only thing you edit by hand (schema_version 2)
-  README.md                      narrative snapshot + workstream table + refresh steps
-  <slug>-project-mindmap.html    rendered; one file, works offline
-  <slug>-project-mindmap.svg     rendered
-  <slug>-project-mindmap.png     rendered (Inkscape)
-```
+## Resolve locations
 
-The renderer, templates, colours and schema live in this skill
-(`scripts/render_tracker.py`, `assets/`). Never copy them into a tracker
-directory and never edit rendered files by hand. `assets/example/` is a complete
-two-workstream state you can read as the reference for every field.
+Resolve the notes checkout from `--notes DIR`, `TRACKER_NOTES_REPO`, or the current
+Git repository root, in that order. When invoked from a product repository, supply
+the notes path explicitly rather than assuming the current repository is a vault.
+Find the skill's actual installed path; use `TRACKER_SKILL` in commands below.
+Do not assume a particular agent, home directory or installation layout.
 
-## Installation
+Read `<notes>/.tracker-workflow.json` when present. See
+[configuration](references/configuration.md) for defaults, overrides and hub support.
+Resolve the project from the user's selected folder or current project repository.
+Use one tracker for a multi-repository project; retain repository fields per
+workstream. If several existing trackers plausibly match, inspect their metadata
+before asking a narrowly scoped question.
 
-The skill is used from its installed path, so tracker READMEs can name one
-command that works from any checkout:
+## Update sequence
 
-```bash
-ln -s ~/devel/portaj/ai-skills/skills/tracker ~/.claude/skills/tracker   # once
-python3 ~/.claude/skills/tracker/scripts/render_tracker.py --help
-```
+1. **Use an isolated owned worktree.** Set `WT_OWNER` to the current session ID.
+   Run `bash "$TRACKER_SKILL/scripts/tracker-begin.sh" --notes "$NOTES" --project
+   "Example Project"`. The helper uses the sibling `ai-scratch` skill's `wt.sh`,
+   or `TRACKER_WT`, and prints `TRACKER_WORKTREE`, `TRACKER_DIR`, the branch and
+   optional hub input worktree. Treat output as key/value data; do not shell-evaluate
+   it. Read or assign the reported paths directly, preserving spaces. It never
+   edits the live notes checkout. If local default-branch changes are unpublished,
+   inspect them and use `--base REF` only deliberately; a PR needs that base
+   published first. Do not silently discard local context.
 
-## Invocation
+2. **Gather current evidence.** Read existing state, plan, source repository
+   revisions, relevant issues, PRs, tests, release and installation evidence.
+   Read the project's `workflow.json`, prompt runs and review decisions when
+   present; use [project-workflow](../project-workflow/SKILL.md) for that lifecycle.
+   Record observation dates, source revisions, unavailable sources, conflicts,
+   and remaining gaps in the tracker README. Distinguish historical facts from
+   newly verified observations. An unavailable source is unknown, not a failure
+   or a completed stage. Never erase stronger evidence because a later run did
+   not repeat it; resolve actual contradictions explicitly.
 
-| Form | Does |
-|---|---|
-| `/tracker` | Refresh the tracker for the project of the current repository; scaffold one if none exists |
-| `/tracker new <Name>` | Scaffold a tracker for `<Name>` even if the cwd is unrelated |
-| `/tracker hub` | Only rebuild the combined TrackerHub viewer |
-| `/tracker --no-push` | Stop at local commits in the worktree; print the push and PR commands |
+3. **Create only when missing.** Run `python3 "$TRACKER_SKILL/scripts/new_tracker.py" --tracker-dir DIR
+   --project NAME --slug SLUG --repository owner/repository --commit FULL_SHA
+   --path docs/PLAN.md --date YYYY-MM-DD --workstreams N`. Replace all `TODO`
+   placeholders with evidence before publication. If a tracker exists, update it
+   instead of generating a second copy.
 
-Resolve the project name from `gh repo view --json name` (strip the owner), or
-from the operator's words when they name it. Multi-repo projects (for example
-`porta.codes`, which spans three repositories) use one tracker with workstreams
-grouped by repository, each workstream's `repository` field naming its repo.
+4. **Edit the structured state.** Keep these independent stage values:
+   `scoping`, `discovery`, `issues`, `implementation`, `testing`, `delivery`, each
+   `complete`, `partial` or `pending`. Completion of one does not set the others.
+   A completed prompt proves its bounded deliverable only; merged code, passing
+   checks, remote installation and accepted delivery require their own evidence.
+   Do not derive a percentage from the six indicators. Preserve unsupported
+   statuses and flag missing evidence rather than inventing progress.
+   - `issues` complete means remaining work has linked open issues, not that
+     issues are closed. A different third-stage label uses `issues_label` and
+     `issues_note` in `config.json`; the state key stays `issues`.
+   - `github_issues` contains `/issues/N` associations only. PRs, releases,
+     documents and runs belong in `evidence_url`.
+   - Preserve six indicators, five acceptance gates, three context panels and
+     six callouts. Edit content, not geometry. Use single-line text per field.
+   - Use `snapshot.evidence_ref` for the inspected revision and
+     `extracted_from` for a committed source file. If sources differ, record the
+     per-source revisions in the README; do not imply one SHA covers them all.
+   - Keep secrets out of the state, rendered output and evidence records.
 
-## The sequence
+5. **Reconcile the narrative.** Update the README snapshot, workstream table,
+   next action, evidence coverage and gaps to agree with state. Give each gap an
+   owner or explicit external dependency and a destination. Link the workflow
+   ledger rather than copying prompt statuses into a second authority. When the
+   workflow ledger exists, run its `check --project-dir DIR` before publication;
+   record known legacy exceptions without treating them as new verification.
 
-1. **Begin in a worktree, never the live vault.** The Obsidian git plugin
-   auto-commits the live checkout every few minutes, so any in-place edit lands
-   on `main` before a PR exists.
-   ```bash
-   eval "$(scripts/tracker-begin.sh --project "<Name>")"
-   # prints TRACKER_BRANCH, TRACKER_TASK, TRACKER_WORKTREE, TRACKER_DIR, TRACKER_SLUG,
-   # TRACKER_EXISTS and, when TrackerHub exists, TRACKER_WORK_SIBLING
-   ```
-   Set `WT_OWNER` to your session id first. It creates `jp/d/<slug>-tracker-<date>`
-   from `origin/main` in a task worktree made by the ai-scratch helper
-   (`wt.sh start`), at `~/devel/worktrees/portaj/Personal/tracker-<slug>-<date>`
-   with an ownership record (it refuses to run without `WT_OWNER`). A second
-   `wt.sh` worktree of the work vault (`…/Work/tracker-<slug>-<date>`, on a local
-   `<branch>-hub-input` branch fast-forwarded to origin's default, never committed
-   to or pushed) is made so the hub build can verify both. Never put tracker work under
-   `/private/tmp` or make another clone of a vault. Pass
-   `--base main` when the vault's local `main` is ahead of `origin/main` — the
-   Obsidian backup plugin does not always push — and tell the operator the
-   branch cannot be PR'd until `main` is.
+6. **Render and verify.** Use `python3 "$TRACKER_SKILL/scripts/render_tracker.py" --tracker-dir DIR`, then
+   `--check`; add `--png` only with Inkscape. Review the generated view for
+   legibility and compare state, view and summary. `--check` detects rendering
+   drift, not truth of project claims. Never edit rendered views by hand.
 
-2. **Gather evidence before touching the state.** Pull live facts with `gh`:
-   merged PRs (`gh pr list --state merged`), open PRs and issues, latest
-   releases, recent workflow runs, and the default-branch SHA. For a refresh,
-   read the existing state first and change only what the evidence changed.
-   Every claim in the map must be traceable to a PR, issue, release, run or
-   commit; "it works" is not evidence.
+7. **Prepare the PR.** With publication authority, run
+   `bash "$TRACKER_SKILL/scripts/tracker-finish.sh" --tracker-dir DIR`; otherwise add `--no-push`.
+   The helper verifies ownership, renders, checks, optionally rebuilds the hub,
+   and commits. A PNG is refreshed or refused, never silently left stale. Hub
+   catalogs pin tracker commits, so tracker and hub are separate commits. Preserve
+   their exact SHAs with a merge commit, or regenerate the catalog pins after any
+   rebase or squash that rewrites them. The helper never
+   merges. If a central viewer lives in another repository, prepare its separate
+   rebuild/PR after the tracker revision is published; report any pending refresh.
+   Report the PR, changed statuses and evidence, validations, unknowns,
+   and next action. Preserve worktrees until the reviewed change is merged;
+   follow the printed `wt.sh finish` and `check --for-removal` instructions.
 
-3. **Scaffold if needed** (`TRACKER_EXISTS=0`):
-   ```bash
-   scripts/new_tracker.py --tracker-dir "$TRACKER_DIR" --project "<Name>" --slug "$TRACKER_SLUG" \
-     --repository owner/repo --commit <full-sha> --path docs/PLAN.md --date YYYY-MM-DD --workstreams N
-   ```
-   Every placeholder is literally `TODO`; `tracker-finish.sh` refuses a state
-   that still contains one.
+## Migration and evaluation
 
-4. **Edit `<slug>-project-state.json`.** Rules that keep the maps comparable:
-   - Six stages per workstream, each independently `complete`, `partial` or
-     `pending`: scoping, discovery, issues, implementation, testing, delivery.
-     They are not a progress bar. Delivery means the workstream's own result is
-     delivered, not that the product launched. Testing is evidence, not
-     acceptance.
-   - **Issues ✓ means the remaining work has open issues linked**, not that they
-     are closed. Shipped workstreams normally show issues `pending` because
-     finished work needs no retrospective issue. If a project uses the third
-     stage differently (Plato: Approval; Workroom: Review), set
-     `issues_label` and `issues_note` in `config.json`; the state key stays
-     `issues`.
-   - `github_issues` entries are **issues only** (`/issues/N` URLs; the renderer
-     rejects anything else). PRs, docs, releases and runs go in `evidence_url`.
-     The first issue on a workstream or task becomes the card's click target.
-   - `color_stage` on a task is the kind of work its evidence shows, not a
-     percentage. A workstream card takes the colour of its furthest complete
-     stage.
-   - Keep text to one line per field; the renderer rejects control characters
-     and the cards do not wrap. Center-panel lines fit about 45 characters.
-   - Exactly five acceptance gates, three context panels and six callouts; the
-     template fixes their shape. Edit values, not structure.
-   - `snapshot.evidence_ref` is the short SHA the map was read at;
-     `extracted_from` names a committed file in the anchor repository.
-   - **Secrets:** binding names, presence booleans and public identifiers only.
-     No values, URLs with tokens, or state excerpts — the notes repo is
-     committed and shared.
+Migrate an old self-contained tracker only when needed, with
+`python3 "$TRACKER_SKILL/scripts/migrate_tracker.py" --tracker-dir DIR --project NAME --slug SLUG --dry-run`
+first. It preserves recoverable evidence; review the diff before applying.
 
-5. **Update `README.md`** in the tracker directory: the `**Snapshot: <date>.**`
-   paragraph, the "Next" line and the workstream table must agree with the map.
-
-6. **Finish.** Renders, verifies with `--check`, rebuilds TrackerHub, commits,
-   and — with operator authority for the notes repository — pushes and opens
-   the PR. It refuses to run anywhere but a `wt.sh` task worktree with an
-   ownership record; when the hub exists it requires the task's work-vault
-   worktree and a passing hub build (given that worktree with `--root`) before
-   anything is pushed; and it re-renders the PNG with
-   Inkscape or refuses to ship one (no Inkscape and a PNG or a README reference
-   to one is an error — the image must never contradict the state). It removes
-   nothing; it prints the `wt.sh` commands for step 7.
-   ```bash
-   scripts/tracker-finish.sh --tracker-dir "$TRACKER_DIR" [--title "docs: ..."] [--no-push]
-   ```
-   Two commits are made on purpose: the tracker, then the hub rebuild, because
-   the hub catalog pins the tracker's commit SHA. Ask for the PR to be merged
-   with a **merge commit** (or rebase), not squash, so those pins stay
-   resolvable. Lead the reply with the PR URL.
-
-7. **After the merge, finish through `wt.sh`.** For each of the two task
-   worktrees run the `wt.sh finish … --pr <url> --release` and
-   `wt.sh check … --for-removal` lines `tracker-finish.sh` printed. Remove a
-   worktree only with the non-forced `git worktree remove` that the passing
-   check prints, and only with the operator's authority.
-
-## Publication authority
-
-`tracker-finish.sh` pushes a docs branch and opens a PR against the notes
-repository's default branch. It never pushes to `main`. Run it with `--no-push`
-unless the operator has authorised pushes and PRs for the notes repo in this
-session (or a standing grant such as `PRRQ_PUBLICATION=push-allowed` applies).
-Merging is the operator's, through their review gate.
-
-## Migrating a tracker that still carries its own renderer
-
-```bash
-scripts/migrate_tracker.py --tracker-dir "$TRACKER_DIR" --project "<Name>" --slug <slug> [--dry-run]
-```
-
-Handles schema 1 (`planning` stage, named panel keys, issue URLs as strings,
-task `evidence_note`) and schema-2 variants with renamed fields or a renamed
-third stage. Project-level text that the old tracker kept in its own SVG
-template is recovered by coordinate against the shared template; nothing is
-invented — a field that cannot be recovered is an error. Dropped per-task
-notes and extra source URLs are appended to the README so no evidence is lost.
-Review the diff, then finish as usual.
-
-## Renderer reference
-
-```bash
-scripts/render_tracker.py --tracker-dir DIR            # HTML + SVG
-scripts/render_tracker.py --tracker-dir DIR --png      # + PNG (Inkscape)
-scripts/render_tracker.py --tracker-dir DIR --check    # exit 1 if outputs differ from state
-```
-
-`config.json` keys: `workstream_count` (required, must equal the number of
-workstreams), `project` (display name; default: `project.heading` before the
-first ` · `), `slug` (file stem; default: from the state filename), `ref_label`
-(caption words before the ref, e.g. `kioskit main`; default `main`),
-`issues_label` (third-stage display name; default `Issues`), `issues_note`
-(legend sentence; default `<label> ✓ means linked, not closed.`).
-
-## TrackerHub
-
-`Projects/TrackerHub/build.py` in the notes repo bundles every rendered map into
-one offline `tracker-mindmaps.html`. It refuses uncommitted sources and expects
-the work vault as a sibling directory named `notes-work`; `tracker-begin.sh`
-arranges both. New trackers are discovered automatically — nothing to register.
+Use [evaluation](references/evaluation.md) to assess the next five real updates.
+A successful render is a structural check. Judge whether a fresh reader can find
+what changed, its evidence, unresolved work, and the next action without another
+broad discovery pass.

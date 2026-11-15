@@ -46,34 +46,32 @@ The map uses the shared tracker renderer from the `tracker` skill: six stage ind
 
 ## Refresh
 
-The renderer is the `tracker` skill from [ai-skills](https://github.com/JonathanPorta/ai-skills/tree/main/skills/tracker), installed once at `~/.claude/skills/tracker`:
+Set `TRACKER_SKILL` to the installed `tracker` skill directory. Edit
+`{slug}-project-state.json`, then from this directory:
 
 ```sh
-ln -s ~/devel/portaj/ai-skills/skills/tracker ~/.claude/skills/tracker   # once, after cloning ai-skills beside the other repositories
+python3 "$TRACKER_SKILL/scripts/render_tracker.py" --tracker-dir . --png
+python3 "$TRACKER_SKILL/scripts/render_tracker.py" --tracker-dir . --check
 ```
 
-Edit `{slug}-project-state.json`, then from this directory:
-
-```sh
-python3 ~/.claude/skills/tracker/scripts/render_tracker.py --png     # HTML, SVG and PNG (the PNG needs Inkscape)
-python3 ~/.claude/skills/tracker/scripts/render_tracker.py --check   # confirm the outputs match the JSON
-```
-
-Or run `/tracker` from the project repository. Commit the tracker, then rebuild TrackerHub (`python3 Projects/TrackerHub/build.py`) so it appears in the combined viewer.
+PNG rendering requires Inkscape. Use the skill's begin/finish helpers for an
+isolated change and optional hub rebuild, following the notes repository's
+`.tracker-workflow.json`. Preserve independent stages and record source dates,
+unknowns and the next action in this README.
 '''
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--tracker-dir', type=Path, required=True, help='Directory to create, e.g. Projects/<Name>/Tracker')
-    parser.add_argument('--project', required=True, help='Display name, e.g. "porta.codes"')
-    parser.add_argument('--slug', required=True, help='File stem, lower-case with hyphens, e.g. porta-codes')
+    parser.add_argument('--project', required=True, help='Display name, e.g. "Example Project"')
+    parser.add_argument('--slug', required=True, help='File stem, lower-case with hyphens, e.g. example-project')
     parser.add_argument('--repository', required=True, help='Anchor repository owner/name for the snapshot')
     parser.add_argument('--commit', required=True, help='Full 40-character SHA the snapshot is read from')
     parser.add_argument('--path', default='README.md', help='A committed file in the anchor repository (default README.md)')
     parser.add_argument('--date', required=True, help='Snapshot date YYYY-MM-DD')
     parser.add_argument('--workstreams', type=int, default=2, help='Number of workstream placeholders (default 2)')
-    parser.add_argument('--ref-label', default='main', help="Caption words before the ref, e.g. 'kioskit main'")
+    parser.add_argument('--ref-label', default='main', help="Caption words before the ref, e.g. 'service main'")
     parser.add_argument('--issues-label', default='Issues', help='Display name of the third stage')
     args = parser.parse_args(argv)
     try:

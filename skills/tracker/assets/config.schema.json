@@ -25,7 +25,7 @@
     "ref_label": {
       "type": "string",
       "minLength": 1,
-      "description": "Words before the evidence ref in the snapshot caption, e.g. 'kioskit main'. Defaults to 'main'."
+      "description": "Words before the evidence ref in the snapshot caption, e.g. 'service main'. Defaults to 'main'."
     },
     "issues_label": {
       "type": "string",

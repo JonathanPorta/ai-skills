@@ -11,9 +11,8 @@
 # Guarantees:
 #   - runs only in a wt.sh task worktree with an ownership record (as made by
 #     tracker-begin.sh), never the live vault;
-#   - when TrackerHub exists, the task's work-vault worktree must be present (and
-#     owned) and the hub build and check, given that worktree with --root, must
-#     pass before anything is pushed;
+#   - when TrackerHub has a companion repository, its input worktree must be
+#     present and owned; the hub build and check must pass before anything is pushed;
 #   - a PNG is either re-rendered by Inkscape or refused; a stale image never ships;
 #   - it removes nothing: after the PR merges, finish the worktrees with wt.sh
 #     (finish, then check --for-removal and its non-forced removal plan).
@@ -24,6 +23,7 @@ skill_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 render="$skill_dir/scripts/render_tracker.py"
 tracker_dir=""
 work_vault=""
+config=""
 title=""
 open_pr=1
 push=1
@@ -31,6 +31,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --tracker-dir) tracker_dir="$2"; shift 2 ;;
     --work) work_vault="$2"; shift 2 ;;
+    --config) config="$2"; shift 2 ;;
     --title) title="$2"; shift 2 ;;
     --no-pr) open_pr=0; shift ;;
     --no-push) push=0; open_pr=0; shift ;;
@@ -86,22 +87,27 @@ if grep -q 'TODO' "$state_file"; then
 fi
 stem="$(basename "$state_file" -project-state.json)-project-mindmap"
 
-# When the hub exists, its sibling must be usable before anything is committed.
-hub="$worktree/Projects/TrackerHub/build.py"
+# When the hub needs a companion, it must be usable before anything is committed.
+primary="$(git -C "$worktree" rev-parse --path-format=absolute --git-common-dir)"
+primary="${primary%/.git}"
+settings=(--repo "$worktree" --checkout-root "$primary")
+[ -n "$config" ] && settings+=(--config "$config")
+settings_shell="$(python3 "$skill_dir/scripts/workflow_config.py" "${settings[@]}")" || exit 2
+eval "$settings_shell"
+hub="$worktree/$tracker_hub_script"
 sibling=""
-hub_root=()
+# Keep this array nonempty: Bash 3.2 treats an empty array as unset under set -u.
+hub_command=(python3 "$hub")
 if [ -f "$hub" ]; then
-  work_repo="$(python3 - "$worktree/Projects/TrackerHub/config.json" <<'PY'
-import json, sys
-print(next((r['repository'] for r in json.load(open(sys.argv[1]))['repositories'] if r['repository'].endswith('/notes-work')), ''))
-PY
-)"
-  work_vault="${work_vault:-${TRACKER_WORK_REPO:-$HOME/Obsidian/Work}}"
-  [ -d "$work_vault" ] && sibling="$wt_root/$(basename "$(cd "$work_vault" && pwd -P)")/$task"
-  hub_root=(--root "$work_repo=$sibling")
-  if [ -z "$work_repo" ] || [ -z "$sibling" ] || [ ! -d "$sibling" ] || ! owned "$sibling"; then
-    printf 'TrackerHub exists but its work-vault sibling is missing or not owned (%s); run tracker-begin.sh again\n' "${sibling:-unset}" >&2
-    exit 1
+  work_repo="$(python3 "$skill_dir/scripts/workflow_config.py" --repo "$worktree" --hub-repository "$tracker_companion_repository" --hub-config "$tracker_hub_config")"
+  if [ -n "$work_repo" ]; then
+    work_vault="${work_vault:-${TRACKER_WORK_REPO:-$tracker_companion_checkout}}"
+    [ -d "$work_vault" ] && sibling="$wt_root/$(basename "$(cd "$work_vault" && pwd -P)")/$task"
+    hub_command+=(--root "$work_repo=$sibling")
+    if [ -z "$work_repo" ] || [ -z "$sibling" ] || [ ! -d "$sibling" ] || ! owned "$sibling"; then
+      printf 'TrackerHub exists but its work-vault sibling is missing or not owned (%s); run tracker-begin.sh again\n' "${sibling:-unset}" >&2
+      exit 1
+    fi
   fi
 fi
 
@@ -131,11 +137,11 @@ if ! grep -q 'Snapshot' "$tracker_dir/README.md"; then
   exit 1
 fi
 
-git -C "$worktree" add -A -- "$rel"
+git --literal-pathspecs -C "$worktree" add -A -- "$rel"
 : "${title:=docs: Update The $project Project Tracker}"
 if git -C "$worktree" diff --cached --quiet; then
   # Resuming after an earlier failure: the tracker commit may already be HEAD.
-  if git -C "$worktree" diff --quiet "HEAD~1" HEAD -- "$rel" 2>/dev/null; then
+  if git --literal-pathspecs -C "$worktree" diff --quiet "HEAD~1" HEAD -- "$rel" 2>/dev/null; then
     printf 'nothing changed under %s\n' "$rel" >&2
     exit 1
   fi
@@ -147,9 +153,9 @@ tracker_commit="$(git -C "$worktree" rev-parse --short HEAD)"
 
 hub_commit=""
 if [ -f "$hub" ]; then
-  (cd "$worktree" && python3 "$hub" "${hub_root[@]}")
-  (cd "$worktree" && python3 "$hub" --check "${hub_root[@]}")
-  git -C "$worktree" add -A -- Projects/TrackerHub/catalog.json tracker-mindmaps.html
+  (cd "$worktree" && "${hub_command[@]}")
+  (cd "$worktree" && "${hub_command[@]}" --check)
+  git --literal-pathspecs -C "$worktree" add -A -- "${tracker_hub_outputs[@]}"
   if ! git -C "$worktree" diff --cached --quiet; then
     git -C "$worktree" commit -q -m "docs: Rebuild TrackerHub With The $project Tracker"
     hub_commit="$(git -C "$worktree" rev-parse --short HEAD)"
