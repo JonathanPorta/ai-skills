@@ -236,6 +236,21 @@ resource references, hidden Unicode, JSON, Python syntax, naming, and
 skill-local documentation. It requires GNU Make and Python 3.10 or newer, with
 no third-party Python packages.
 
+CI runs only on `ubuntu-slim`: Python 3.10 with an actual Bash 3.2 interpreter,
+and Python 3.14 with the system shell. The shell compatibility check builds a
+checksum-pinned GNU Bash 3.2.57 source archive; it does not need macOS or Apple
+SDKs. To reproduce that cell on Linux (GCC, Make, and Bison required):
+
+```bash
+make setup-bash32 BASH32_DIR="$HOME/.cache/ai-skills/bash32"
+PATH="$HOME/.cache/ai-skills/bash32/bin:$PATH" make check
+```
+
+Feature branches validate through `pull_request`; only `main` also runs on
+`push`, avoiding duplicate full runs for each PR commit. Both jobs have a
+15-minute timeout, matching the slim runner limit. Native platform coverage,
+if introduced later, must use ProofGlass instead of a hosted native runner.
+
 The current Open Design plugin contract test is separate because it checks out and
 installs the exact pinned upstream runtime:
 
