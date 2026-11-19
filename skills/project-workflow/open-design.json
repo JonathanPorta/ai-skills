@@ -1,0 +1,20 @@
+{
+  "$schema": "https://open-design.ai/schemas/plugin.v1.json",
+  "specVersion": "1.0.0",
+  "name": "project-workflow",
+  "title": "Project Workflow",
+  "version": "0.1.0",
+  "description": "Maintain numbered project assignments, execution evidence, independent review and measurable handoff quality.",
+  "tags": ["project", "workflow", "notes", "review"],
+  "compat": {"agentSkills": [{"path": "./SKILL.md"}]},
+  "od": {
+    "kind": "skill",
+    "taskKind": "tune-collab",
+    "mode": "export",
+    "platform": "desktop",
+    "scenario": "project-workflow",
+    "useCase": {"query": "Prepare a bounded project assignment and preserve results for independent review."},
+    "context": {"skills": [{"path": "./SKILL.md"}]},
+    "capabilities": ["prompt:inject"]
+  }
+}

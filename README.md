@@ -14,6 +14,7 @@ additive plugin sidecar stay beside the portable `SKILL.md` they describe.
 | [`ai-scratch`](skills/ai-scratch/) | Keep review clones and generated files in one designated scratch directory, and reclaim its disk through a confirm-first cleanup. | Format-compatible; not yet verified | Format-compatible; not yet verified | Verified with Claude Code |
 | [`recon`](skills/recon/) | Capture a public website as a research pack, from a one-page gist to a Docker-replayable forensic snapshot. | Format-compatible; not yet verified | Format-compatible; not yet verified | Verified with Claude Code (`gist` tier) |
 | [`tracker`](skills/tracker/) | Add or refresh a project status tracker in the notes repository — JSON state rendered into one offline HTML mind map — and deliver it as a PR. | Format-compatible; not yet verified | Format-compatible; not yet verified | Verified with Claude Code |
+| [`project-workflow`](skills/project-workflow/) | Manage numbered assignments, execution evidence, independent review, supersession, and workflow health in a project notes folder. | Format-compatible; not yet verified | Format-compatible; local helper tests only | Format-compatible; not yet verified |
 
 Compatibility labels are conservative:
 
@@ -23,6 +24,24 @@ Compatibility labels are conservative:
   with the named harness family.
 - **Format-compatible** means the directory follows the Agent Skills layout but
   has not completed an end-to-end harness test here.
+
+## Project tracking and assignments
+
+Use `tracker` to create or refresh a project's visual status from evidence. Use
+`project-workflow` to prepare the next numbered assignment, record execution,
+review results, and carry unresolved work forward. They share a project folder,
+but preserve separate meanings: an assignment can finish while testing or
+delivery of its workstream remains incomplete.
+
+An agent can read the portable `SKILL.md` directly; no slash-command integration
+is required. Keep notes paths and publication conventions in the consuming
+repository's configuration and `AGENTS.md`. Keep examples in this repository
+fictional and generic; do not copy private project records into reusable skills.
+
+Start with [the workflow guide](skills/project-workflow/SKILL.md) and
+[tracker configuration](skills/tracker/SKILL.md). Run local health checks at each
+handoff and compare five actual runs before claiming the workflow improved
+handoff time or reduced corrections. Structural validity is only one measure.
 
 ## Checkpoint or handoff?
 
@@ -149,6 +168,8 @@ ln -s "$AI_SKILLS_REPO/skills/package-design-handoff" \
 ln -s "$AI_SKILLS_REPO/skills/ai-scratch" "$HOME/.agents/skills/ai-scratch"
 ln -s "$AI_SKILLS_REPO/skills/recon" "$HOME/.agents/skills/recon"
 ln -s "$AI_SKILLS_REPO/skills/inspect-opendesign" "$HOME/.agents/skills/inspect-opendesign"
+ln -s "$AI_SKILLS_REPO/skills/tracker" "$HOME/.agents/skills/tracker"
+ln -s "$AI_SKILLS_REPO/skills/project-workflow" "$HOME/.agents/skills/project-workflow"
 ```
 
 For Claude Code, link the same directories into `~/.claude/skills/`:
@@ -158,6 +179,8 @@ mkdir -p "$HOME/.claude/skills"
 ln -s "$AI_SKILLS_REPO/skills/ai-scratch" "$HOME/.claude/skills/ai-scratch"
 ln -s "$AI_SKILLS_REPO/skills/recon" "$HOME/.claude/skills/recon"
 ln -s "$AI_SKILLS_REPO/skills/inspect-opendesign" "$HOME/.claude/skills/inspect-opendesign"
+ln -s "$AI_SKILLS_REPO/skills/tracker" "$HOME/.claude/skills/tracker"
+ln -s "$AI_SKILLS_REPO/skills/project-workflow" "$HOME/.claude/skills/project-workflow"
 ```
 
 Symlinking keeps the installed agent on the reviewed checkout. Review and run

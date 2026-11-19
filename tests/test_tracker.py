@@ -208,17 +208,24 @@ class ScaffoldTests(TrackerFixture):
 
 
 HUB_STUB = """#!/usr/bin/env python3
-import json, pathlib, sys
+import argparse, json, pathlib, sys
+parser = argparse.ArgumentParser()
+parser.add_argument('--check', action='store_true')
+parser.add_argument('--root', action='append', default=[])
+args = parser.parse_args()
+print('HUB_ARGS=' + json.dumps(sys.argv[1:]))
 root = pathlib.Path(__file__).resolve().parents[2]
 config = json.loads((root / 'Projects' / 'TrackerHub' / 'config.json').read_text())
-roots = dict(a.split('=', 1) for a in sys.argv[sys.argv.index('--root') + 1:sys.argv.index('--root') + 2]) if '--root' in sys.argv else {}
-work = pathlib.Path(roots.get(config['repositories'][1]['repository']) or (root / 'Projects' / 'TrackerHub' / config['repositories'][1]['root'])).resolve()
+roots = dict(a.split('=', 1) for a in args.root)
+work = root
+if len(config['repositories']) > 1:
+    work = pathlib.Path(roots.get(config['repositories'][1]['repository']) or (root / 'Projects' / 'TrackerHub' / config['repositories'][1]['root'])).resolve()
 if not work.is_dir():
     print('Tracker build failed: missing work vault ' + str(work), file=sys.stderr)
     raise SystemExit(1)
 maps = sorted(str(p.relative_to(root)) for p in root.rglob('*mindmap.html') if 'Tracker' in p.parts)
 catalog = json.dumps({'maps': maps}, indent=1) + '\\n'
-if '--check' in sys.argv:
+if args.check:
     if (root / 'Projects' / 'TrackerHub' / 'catalog.json').read_text() != catalog:
         raise SystemExit('stale')
     print('Checked %d maps' % len(maps))
@@ -228,8 +235,8 @@ else:
     print('Bundled %d maps' % len(maps))
 """
 HUB_CONFIG = {"schema_version": 1, "repositories": [
-    {"repository": "X/notes-personal", "root": "../..", "group": "personal"},
-    {"repository": "X/notes-work", "root": "../../../Work", "group": "work"}]}
+    {"repository": "X/reference-notes", "root": "../..", "group": "personal"},
+    {"repository": "X/shared-notes", "root": "../../../Work", "group": "work"}]}
 BEGIN = SKILL / "scripts" / "tracker-begin.sh"
 FINISH = SKILL / "scripts" / "tracker-finish.sh"
 
@@ -290,7 +297,9 @@ class WorkflowFixture(unittest.TestCase):
         env = dict(self.env)
         if env_extra:
             env.update(env_extra)
-        return subprocess.run(["bash", str(script), *args], capture_output=True, text=True, timeout=120, env=env)
+        # Exercise the supported system shell even if a newer Bash is on PATH.
+        shell = "/bin/bash" if sys.platform == "darwin" else "bash"
+        return subprocess.run([shell, str(script), *args], capture_output=True, text=True, timeout=120, env=env)
 
     def begin(self) -> dict:
         result = self.run_script(BEGIN, "--project", "Example", "--date", "2026-11-03")
@@ -327,6 +336,10 @@ class WorkflowTests(WorkflowFixture):
         self.assertEqual(log.splitlines(), ["docs: Rebuild TrackerHub With The Example Tracker",
                                             "docs: Update The Example Project Tracker", "seed"])
         self.assertIn("HUB_COMMIT=", result.stdout)
+        hub_calls = [json.loads(line.removeprefix('HUB_ARGS='))
+                     for line in result.stdout.splitlines() if line.startswith('HUB_ARGS=')]
+        root_args = ['--root', 'X/shared-notes=' + out['TRACKER_WORK_SIBLING']]
+        self.assertEqual(hub_calls, [root_args, root_args + ['--check']])
         self.assertTrue(worktree.exists(), "finish never removes worktrees")
         self.assertIn("wt.sh finish", result.stdout)
 
@@ -335,7 +348,7 @@ class WorkflowTests(WorkflowFixture):
         self.assertEqual(result.returncode, 2)
         self.assertIn("not a wt.sh task worktree with an unreleased ownership record", result.stderr)
         foreign = self.tmp / "foreign"
-        git(self.notes, "worktree", "add", "-q", "-b", "jp/d/foreign", str(foreign))
+        git(self.notes, "worktree", "add", "-q", "-b", "docs/foreign", str(foreign))
         result = self.run_script(FINISH, "--tracker-dir", str(foreign / self.tracker_rel), "--no-push")
         self.assertEqual(result.returncode, 2)
         self.assertTrue((foreign / self.tracker_rel).exists())
@@ -348,7 +361,7 @@ class WorkflowTests(WorkflowFixture):
         for day, root in (("05", "../../../../../escape"), ("06", "Link/Work")):
             config = dict(HUB_CONFIG)
             config["repositories"] = [HUB_CONFIG["repositories"][0],
-                                      {"repository": "X/notes-work", "root": root, "group": "work"}]
+                                      {"repository": "X/shared-notes", "root": root, "group": "work"}]
             (hub / "config.json").write_text(json.dumps(config))
             git(self.notes, "add", "-A")
             git(self.notes, "commit", "-qm", "root " + root)
@@ -401,7 +414,7 @@ class WorkflowTests(WorkflowFixture):
         self.change_state(tracker_dir)
         result = self.run_script(FINISH, "--tracker-dir", str(tracker_dir), "--no-pr")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("jp/d/example-tracker-20261103", git(self.notes, "branch", "-r", "--list", "origin/*"))
+        self.assertIn("docs/example-tracker-20261103", git(self.notes, "branch", "-r", "--list", "origin/*"))
         self.assertTrue(worktree.exists())
         self.assertTrue(sibling.exists())
         self.assertIn("finish notes tracker-example-20261103 --pr", result.stdout)
@@ -409,6 +422,121 @@ class WorkflowTests(WorkflowFixture):
         record = json.loads((self.owners / "notes" / "tracker-example-20261103.json").read_text())
         self.assertFalse(record["released"], "release is wt.sh finish's job, after the merge")
         self.assertTrue((self.notes / self.tracker_rel).exists(), "the live checkout is untouched")
+
+
+class PortableWorkflowTests(WorkflowFixture):
+    def save_config(self, config):
+        (self.notes / '.tracker-workflow.json').write_text(json.dumps(config))
+        git(self.notes, 'add', '-A')
+        git(self.notes, 'commit', '-qm', 'configure tracker')
+        git(self.notes, 'push', '-q')
+
+    def test_configured_layout_branch_and_generic_companion(self):
+        target = self.notes / 'Research Projects' / 'Example' / 'Tracker'
+        target.parent.mkdir(parents=True)
+        shutil.move(str(self.notes / self.tracker_rel), str(target))
+        self.save_config({'schema_version': 1, 'projects_dir': 'Research Projects',
+                          'branch_prefix': 'team/docs',
+                          'hub': {'companion_repository': 'X/shared-notes',
+                                  'companion_checkout': '../work'}})
+        self.env.pop('TRACKER_WORK_REPO')
+        out = self.begin()
+        self.assertEqual(out['TRACKER_BRANCH'], 'team/docs/example-tracker-20261103')
+        self.assertEqual(out['TRACKER_EXISTS'], '1')
+        self.assertEqual(Path(out['TRACKER_DIR']).relative_to(out['TRACKER_WORKTREE']),
+                         Path('Research Projects/Example/Tracker'))
+        self.change_state(Path(out['TRACKER_DIR']))
+        result = self.run_script(FINISH, '--tracker-dir', out['TRACKER_DIR'], '--no-push')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('HUB_COMMIT=', result.stdout)
+        self.assertEqual(git(self.notes, 'branch', '--show-current'), 'main')
+
+    def test_no_hub_and_single_repository_hub_do_not_require_a_companion(self):
+        self.env.pop('TRACKER_WORK_REPO')
+        hub = self.notes / 'Projects/TrackerHub'
+        (hub / 'config.json').write_text(json.dumps({'repositories': [HUB_CONFIG['repositories'][0]]}))
+        git(self.notes, 'add', '-A')
+        git(self.notes, 'commit', '-qm', 'local hub')
+        git(self.notes, 'push', '-q')
+        out = self.begin()
+        self.assertNotIn('TRACKER_WORK_SIBLING', out)
+        self.change_state(Path(out['TRACKER_DIR']))
+        result = self.run_script(FINISH, '--tracker-dir', out['TRACKER_DIR'], '--no-push')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        hub_calls = [json.loads(line.removeprefix('HUB_ARGS='))
+                     for line in result.stdout.splitlines() if line.startswith('HUB_ARGS=')]
+        self.assertEqual(hub_calls, [[], ['--check']], 'a local-only hub receives no root argument')
+        self.assertIn('HUB_COMMIT=', result.stdout)
+        self.assertEqual(git(Path(out['TRACKER_WORKTREE']), 'status', '--porcelain'), '')
+        shutil.rmtree(hub)
+        git(self.notes, 'add', '-A')
+        git(self.notes, 'commit', '-qm', 'no hub')
+        git(self.notes, 'push', '-q')
+        result = self.run_script(BEGIN, '--project', 'Example', '--date', '2026-11-04')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('TRACKER_WORK_SIBLING=', result.stdout)
+        no_hub = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
+        self.change_state(Path(no_hub['TRACKER_DIR']))
+        result = self.run_script(FINISH, '--tracker-dir', no_hub['TRACKER_DIR'], '--no-push')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('TRACKER_COMMIT=', result.stdout)
+        self.assertNotIn('HUB_COMMIT=', result.stdout)
+        self.assertNotIn('HUB_ARGS=', result.stdout)
+
+    def test_explicit_missing_or_escaping_config_fails_before_worktree_creation(self):
+        result = self.run_script(BEGIN, '--project', 'Example', '--config', str(self.tmp / 'absent.json'))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('explicit config does not exist', result.stderr)
+        self.save_config({'schema_version': 1, 'projects_dir': '../escape'})
+        result = self.run_script(BEGIN, '--project', 'Example')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('must stay inside', result.stderr)
+        self.assertFalse(self.wt_root.exists())
+
+    def test_empty_config_requires_schema_version(self):
+        self.save_config({})
+        result = self.run_script(BEGIN, '--project', 'Example')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('schema_version must be 1', result.stderr)
+        self.assertFalse(self.wt_root.exists())
+
+    def test_hub_output_paths_are_literal_and_do_not_stage_unrelated_files(self):
+        out = self.begin()
+        worktree = Path(out['TRACKER_WORKTREE'])
+        self.change_state(Path(out['TRACKER_DIR']))
+        # A legal filename that is also Git pathspec magic must remain literal.
+        literal = ':(top)**'
+        (worktree / literal).write_text('expected artifact\n')
+        (worktree / 'unrelated-note.md').write_text('must stay untracked\n')
+        (worktree / '.tracker-workflow.json').write_text(json.dumps({
+            'schema_version': 1, 'hub': {'outputs': [literal]}}))
+        result = self.run_script(FINISH, '--tracker-dir', out['TRACKER_DIR'], '--no-push')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        committed = git(worktree, 'show', '--pretty=format:', '--name-only', 'HEAD').splitlines()
+        self.assertEqual(committed, [literal])
+        self.assertIn('?? unrelated-note.md', git(worktree, 'status', '--porcelain'))
+        self.assertIn('?? .tracker-workflow.json', git(worktree, 'status', '--porcelain'))
+
+    def test_finish_rejects_worktree_symlink_escape_and_malformed_hub(self):
+        out = self.begin()
+        worktree = Path(out['TRACKER_WORKTREE'])
+        tracker_dir = Path(out['TRACKER_DIR'])
+        self.change_state(tracker_dir)
+        outside = self.tmp / 'outside'
+        outside.mkdir()
+        (worktree / 'Export').symlink_to(outside, target_is_directory=True)
+        config = {'schema_version': 1, 'hub': {'outputs': ['Export/catalog.json']}}
+        (worktree / '.tracker-workflow.json').write_text(json.dumps(config))
+        result = self.run_script(FINISH, '--tracker-dir', str(tracker_dir), '--no-push')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('escapes through a symlink', result.stderr)
+        self.assertEqual(git(worktree, 'log', '--format=%s', '-1'), 'seed')
+        (worktree / '.tracker-workflow.json').unlink()
+        (worktree / 'Projects/TrackerHub/config.json').write_text('[]')
+        result = self.run_script(FINISH, '--tracker-dir', str(tracker_dir), '--no-push')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('hub configuration must be an object', result.stderr)
+        self.assertNotIn('Traceback', result.stderr)
 
 
 class OwnershipTests(WorkflowFixture):
@@ -444,7 +572,7 @@ class OwnershipTests(WorkflowFixture):
         git(self.work, "remote", "set-head", "origin", "main")
         out = self.begin()
         sibling = Path(out["TRACKER_WORK_SIBLING"])
-        self.assertEqual(git(sibling, "symbolic-ref", "--short", "HEAD"), "jp/d/example-tracker-20261103-hub-input")
+        self.assertEqual(git(sibling, "symbolic-ref", "--short", "HEAD"), "docs/example-tracker-20261103-hub-input")
         (self.work / "later.md").write_text("published later\n")
         git(self.work, "add", "-A")
         git(self.work, "commit", "-qm", "later")

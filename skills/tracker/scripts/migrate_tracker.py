@@ -40,20 +40,18 @@ DEFAULT_NOTE = 'Issues ✓ means linked, not closed.'
 LEGEND_ANCHOR = 'Child nodes show work and evidence.'
 REFRESH = '''## Refresh
 
-The renderer is the `tracker` skill from [ai-skills](https://github.com/JonathanPorta/ai-skills/tree/main/skills/tracker), installed once at `~/.claude/skills/tracker`:
+Set `TRACKER_SKILL` to the installed `tracker` skill directory. Edit
+`{slug}-project-state.json`, then from this directory:
 
 ```sh
-ln -s ~/devel/portaj/ai-skills/skills/tracker ~/.claude/skills/tracker   # once, after cloning ai-skills beside the other repositories
+python3 "$TRACKER_SKILL/scripts/render_tracker.py" --tracker-dir . --png
+python3 "$TRACKER_SKILL/scripts/render_tracker.py" --tracker-dir . --check
 ```
 
-Edit `{slug}-project-state.json`, then from this directory:
-
-```sh
-python3 ~/.claude/skills/tracker/scripts/render_tracker.py --png     # HTML, SVG and PNG (the PNG needs Inkscape)
-python3 ~/.claude/skills/tracker/scripts/render_tracker.py --check   # confirm the outputs match the JSON
-```
-
-Or run `/tracker` from the project repository. Commit the tracker, then rebuild TrackerHub (`python3 Projects/TrackerHub/build.py`) so it appears in the combined viewer.
+PNG rendering requires Inkscape. Use the skill's begin/finish helpers for an
+isolated change and optional hub rebuild, following the notes repository's
+`.tracker-workflow.json`. Preserve independent stages and record source dates,
+unknowns and the next action in this README.
 '''
 
 
