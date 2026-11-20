@@ -48,7 +48,7 @@ python3 "$TRACKER_SKILL/scripts/render_tracker.py" --tracker-dir . --png
 python3 "$TRACKER_SKILL/scripts/render_tracker.py" --tracker-dir . --check
 ```
 
-PNG rendering requires Inkscape. Use the skill's begin/finish helpers for an
+PNG rendering requires `rsvg-convert` (librsvg). Use the skill's begin/finish helpers for an
 isolated change and optional hub rebuild, following the notes repository's
 `.tracker-workflow.json`. Preserve independent stages and record source dates,
 unknowns and the next action in this README.
