@@ -13,7 +13,7 @@
 #     tracker-begin.sh), never the live vault;
 #   - when TrackerHub has a companion repository, its input worktree must be
 #     present and owned; the hub build and check must pass before anything is pushed;
-#   - a PNG is either re-rendered by Inkscape or refused; a stale image never ships;
+#   - a PNG is either re-rendered by rsvg-convert or refused; a stale image never ships;
 #   - it removes nothing: after the PR merges, finish the worktrees with wt.sh
 #     (finish, then check --for-removal and its non-forced removal plan).
 #     --keep is accepted for compatibility and changes nothing.
@@ -112,24 +112,28 @@ if [ -f "$hub" ]; then
 fi
 
 # The PNG is part of what ships. Re-render it or refuse to publish a stale one.
-inkscape=""
+# rsvg-convert (librsvg) is the only renderer. Inkscape is never started: its
+# command line is the desktop application, which aborts under an agent sandbox
+# and can wait on a system dialog outside one.
+rsvg=""
 if [ -z "${TRACKER_NO_PNG:-}" ]; then
-  inkscape="$(command -v inkscape || true)"
+  rsvg="$(command -v rsvg-convert || true)"
 fi
-if [ -n "$inkscape" ]; then
+if [ -n "$rsvg" ]; then
   python3 "$render" --tracker-dir "$tracker_dir" --png
-  png_note="PNG rendered with $("$inkscape" --version 2>/dev/null | head -1 || printf 'Inkscape')."
+  rsvg_version="$("$rsvg" --version 2>/dev/null | head -1 || true)"
+  png_note="PNG rendered with ${rsvg_version:-rsvg-convert}."
 else
   if [ -f "$tracker_dir/$stem.png" ]; then
-    printf 'Inkscape is not available and %s.png exists; it cannot be refreshed, so it would ship stale. Install Inkscape or delete the PNG and its README references.\n' "$stem" >&2
+    printf 'rsvg-convert is not available and %s.png exists; it cannot be refreshed, so it would ship stale. Install librsvg (rsvg-convert) or delete the PNG and its README references.\n' "$stem" >&2
     exit 1
   fi
   if grep -q "$stem.png" "$tracker_dir/README.md" 2>/dev/null; then
-    printf 'README.md references %s.png but no PNG can be rendered here; remove the reference or install Inkscape.\n' "$stem" >&2
+    printf 'README.md references %s.png but no PNG can be rendered here; remove the reference or install librsvg (rsvg-convert).\n' "$stem" >&2
     exit 1
   fi
   python3 "$render" --tracker-dir "$tracker_dir"
-  png_note="No PNG shipped (Inkscape unavailable)."
+  png_note="No PNG shipped (rsvg-convert unavailable)."
 fi
 python3 "$render" --tracker-dir "$tracker_dir" --check
 if ! grep -q 'Snapshot' "$tracker_dir/README.md"; then

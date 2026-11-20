@@ -81,9 +81,11 @@ before asking a narrowly scoped question.
    record known legacy exceptions without treating them as new verification.
 
 6. **Render and verify.** Use `python3 "$TRACKER_SKILL/scripts/render_tracker.py" --tracker-dir DIR`, then
-   `--check`; add `--png` only with Inkscape. Review the generated view for
-   legibility and compare state, view and summary. `--check` detects rendering
-   drift, not truth of project claims. Never edit rendered views by hand.
+   `--check`; add `--png` only when `rsvg-convert` (librsvg) is installed. Never
+   start Inkscape to export it: its command line launches the desktop
+   application. Review the generated view for legibility and compare state,
+   view and summary. `--check` detects rendering drift, not truth of project
+   claims. Never edit rendered views by hand.
 
 7. **Prepare the PR.** With publication authority, run
    `bash "$TRACKER_SKILL/scripts/tracker-finish.sh" --tracker-dir DIR`; otherwise add `--no-push`.

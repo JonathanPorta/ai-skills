@@ -369,16 +369,22 @@ def locate_state(tracker_dir, config):
 
 
 def export_png(svg):
-    inkscape = shutil.which('inkscape')
-    if inkscape is None:
-        raise ValueError('--png requires Inkscape on PATH')
+    """Rasterise the SVG with rsvg-convert (librsvg), a renderer with no GUI.
+
+    Inkscape is deliberately not a fallback: its command line starts the desktop
+    application, which aborts under an agent sandbox and can wait on a system
+    dialog outside one.
+    """
+    renderer = shutil.which('rsvg-convert')
+    if renderer is None:
+        raise ValueError('--png requires rsvg-convert on PATH (macOS: brew install librsvg; '
+                         'Debian/Ubuntu: apt install librsvg2-bin)')
     result = subprocess.run(
-        [inkscape, '--pipe', '--export-type=png', '--export-area-page',
-         '--export-dpi=96', '--export-filename=-'],
+        [renderer, '--format=png', '--dpi-x=96', '--dpi-y=96'],
         input=svg.encode('utf-8'), capture_output=True, timeout=120,
     )
     if result.returncode or not result.stdout.startswith(b'\x89PNG\r\n\x1a\n'):
-        raise ValueError('Inkscape PNG export failed: ' + result.stderr.decode('utf-8', errors='replace'))
+        raise ValueError('rsvg-convert PNG export failed: ' + result.stderr.decode('utf-8', errors='replace').strip())
     return result.stdout
 
 
@@ -390,7 +396,7 @@ def main(argv=None):
     parser.add_argument('--output-dir', type=Path, help='Where to write outputs (default: --tracker-dir)')
     parser.add_argument('--templates', type=Path, default=TEMPLATES, help='Template directory (default: the skill templates)')
     parser.add_argument('--check', action='store_true', help='Verify HTML/SVG are current without writing')
-    parser.add_argument('--png', action='store_true', help='Also render PNG; requires Inkscape on PATH')
+    parser.add_argument('--png', action='store_true', help='Also render PNG; requires rsvg-convert (librsvg) on PATH')
     args = parser.parse_args(argv)
     if args.check and args.png:
         parser.error('--check and --png cannot be combined')

@@ -13,6 +13,7 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -35,8 +36,35 @@ sys.path.insert(0, str(SKILL / "scripts"))
 import render_tracker  # noqa: E402
 
 
-def run(script: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, str(script), *args], capture_output=True, text=True, timeout=120)
+def run(script: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, str(script), *args], capture_output=True, text=True, timeout=120, env=env)
+
+
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def fake_renderers(tmp: Path, rsvg: str | None = "ok") -> tuple[Path, Path]:
+    """A bin directory holding a stand-in rsvg-convert and a tripwire inkscape.
+
+    The inkscape stand-in drops a marker and fails: on macOS the real one is a
+    GUI application, so nothing in the tracker may ever start it.
+    """
+    bindir, marker = tmp / "bin", tmp / "inkscape-was-launched"
+    bindir.mkdir()
+    scripts = {"inkscape": f'#!/bin/sh\n: > "{marker}"\nexit 1\n'}
+    if rsvg == "ok":
+        scripts["rsvg-convert"] = (
+            "#!/bin/sh\n"
+            'if [ "${1:-}" = "--version" ]; then echo "rsvg-convert version 9.9.9"; exit 0; fi\n'
+            f'printf \'%s\\n\' "$@" > "{tmp}/rsvg-args"\n'
+            f'/bin/cat > "{tmp}/rsvg-stdin"\n'
+            "printf '\\211PNG\\r\\n\\032\\n'\n")
+    elif rsvg == "broken":
+        scripts["rsvg-convert"] = "#!/bin/sh\n/bin/cat > /dev/null\necho 'no such font backend' >&2\nexit 3\n"
+    for name, body in scripts.items():
+        (bindir / name).write_text(body)
+        (bindir / name).chmod(0o755)
+    return bindir, marker
 
 
 class TrackerFixture(unittest.TestCase):
@@ -122,6 +150,53 @@ class RenderTests(TrackerFixture):
         svg = render_tracker.render(self.state, self.config, state_path=self.state_path)[".svg"]
         self.assertNotIn("<script>alert(1)</script>", svg)
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt; &amp;", svg)
+
+
+class PngExportTests(TrackerFixture):
+    """The PNG comes from rsvg-convert, a command-line renderer with no GUI.
+
+    Inkscape's command line is its desktop application: under an agent sandbox it
+    aborts while registering with the window server, and outside one it can sit
+    on a system dialog forever. The tripwire proves it is never started.
+    """
+
+    def test_png_is_rendered_by_rsvg_convert_and_inkscape_is_never_launched(self):
+        bindir, marker = fake_renderers(self.tmp)
+        env = dict(os.environ, PATH=f"{bindir}{os.pathsep}{os.environ['PATH']}")
+        result = run(RENDER, "--tracker-dir", str(self.dir), "--png", env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("and PNG", result.stdout)
+        self.assertEqual((self.dir / "example-project-mindmap.png").read_bytes(), PNG_MAGIC)
+        svg = (self.dir / "example-project-mindmap.svg").read_text(encoding="utf-8")
+        self.assertEqual((self.tmp / "rsvg-stdin").read_text(encoding="utf-8"), svg, "the SVG just rendered is what gets rasterised")
+        self.assertIn("--format=png", (self.tmp / "rsvg-args").read_text().splitlines())
+        self.assertFalse(marker.exists(), "Inkscape must never be launched")
+
+    def test_png_without_rsvg_convert_is_refused_and_inkscape_is_no_fallback(self):
+        bindir, marker = fake_renderers(self.tmp, rsvg=None)
+        result = run(RENDER, "--tracker-dir", str(self.dir), "--png", env=dict(os.environ, PATH=str(bindir)))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("rsvg-convert", result.stderr)
+        self.assertFalse(marker.exists(), "Inkscape must never be launched, even when it is the only renderer installed")
+        self.assertFalse((self.dir / "example-project-mindmap.png").exists())
+
+    def test_a_failed_export_reports_the_renderer_error_and_writes_no_png(self):
+        bindir, _ = fake_renderers(self.tmp, rsvg="broken")
+        result = run(RENDER, "--tracker-dir", str(self.dir), "--png", env=dict(os.environ, PATH=str(bindir)))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("rsvg-convert PNG export failed: no such font backend", result.stderr)
+        self.assertFalse((self.dir / "example-project-mindmap.png").exists())
+
+    @unittest.skipUnless(shutil.which("rsvg-convert"), "rsvg-convert (librsvg) is not installed")
+    def test_the_real_rsvg_convert_renders_the_page_at_its_declared_size(self):
+        result = run(RENDER, "--tracker-dir", str(self.dir), "--png")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        png = (self.dir / "example-project-mindmap.png").read_bytes()
+        self.assertTrue(png.startswith(PNG_MAGIC))
+        svg = (self.dir / "example-project-mindmap.svg").read_text(encoding="utf-8")
+        declared = tuple(int(n) for n in re.search(r'<svg[^>]* width="(\d+)" height="(\d+)"', svg).groups())
+        self.assertEqual(declared[0], 4200)
+        self.assertEqual((int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")), declared)
 
 
 class ValidationTests(TrackerFixture):
@@ -405,6 +480,38 @@ class WorkflowTests(WorkflowFixture):
         result = self.run_script(FINISH, "--tracker-dir", str(tracker_dir), "--no-push")
         self.assertEqual(result.returncode, 1)
         self.assertIn("references example-project-mindmap.png", result.stderr)
+        self.assertEqual(git(worktree, "log", "--format=%s", "-1"), "seed")
+
+    def test_finish_renders_the_png_with_rsvg_convert_and_never_launches_inkscape(self):
+        out = self.begin()
+        worktree, tracker_dir = Path(out["TRACKER_WORKTREE"]), Path(out["TRACKER_DIR"])
+        self.change_state(tracker_dir)
+        bindir, marker = fake_renderers(self.tmp)
+        self.env.pop("TRACKER_NO_PNG")
+        result = self.run_script(FINISH, "--tracker-dir", str(tracker_dir), "--no-push",
+                                 env_extra={"PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(marker.exists(), "Inkscape must never be launched, not even for its version")
+        self.assertIn("PNG rendered with rsvg-convert version 9.9.9.", git(worktree, "log", "--format=%b", "-1", "HEAD~1"))
+        rel = (tracker_dir / "example-project-mindmap.png").relative_to(worktree).as_posix()
+        self.assertIn(rel, git(worktree, "show", "--name-only", "--format=", "HEAD~1").splitlines())
+
+    def test_finish_refuses_a_stale_png_when_inkscape_is_the_only_renderer_installed(self):
+        out = self.begin()
+        worktree, tracker_dir = Path(out["TRACKER_WORKTREE"]), Path(out["TRACKER_DIR"])
+        self.change_state(tracker_dir)
+        bindir, marker = fake_renderers(self.tmp, rsvg=None)
+        kept = [d for d in os.environ["PATH"].split(os.pathsep) if d and not (Path(d) / "rsvg-convert").exists()]
+        path = os.pathsep.join([str(bindir), *kept])
+        if not all(shutil.which(tool, path=path) for tool in ("git", "python3")):
+            self.skipTest("git and python3 are only installed beside rsvg-convert here")
+        self.env.pop("TRACKER_NO_PNG")
+        (tracker_dir / "example-project-mindmap.png").write_bytes(b"\x89PNG stale")
+        result = self.run_script(FINISH, "--tracker-dir", str(tracker_dir), "--no-push", env_extra={"PATH": path})
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("would ship stale", result.stderr)
+        self.assertIn("rsvg-convert", result.stderr)
+        self.assertFalse(marker.exists(), "Inkscape must never be launched as a fallback")
         self.assertEqual(git(worktree, "log", "--format=%s", "-1"), "seed")
 
     def test_finish_pushes_but_removes_nothing_and_hands_off_to_wt(self):
