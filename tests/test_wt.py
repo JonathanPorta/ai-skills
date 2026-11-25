@@ -771,6 +771,8 @@ class TestWorkspaces(WtFixture):
     def make_repo(self, path: Path) -> Path:
         path.mkdir(parents=True)
         git(path, "init", "-q")
+        # Explicit and portable: do not depend on init.defaultBranch (unset means master).
+        git(path, "symbolic-ref", "HEAD", "refs/heads/main")
         git(path, "config", "user.email", "t@example.invalid")
         git(path, "config", "user.name", "Test")
         (path / "f").write_text("a\n")
