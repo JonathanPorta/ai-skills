@@ -235,6 +235,15 @@ scripts/wt.sh check  <repo> <task> [--for-removal] [--no-fetch]
 `WT_ROOT`, `WT_PRIMARIES`, `WT_BUNDLES` (default `~/devel/recovery/bundles`) and
 `WT_BRANCH_PREFIX` (default `jp/f/`) can be set in the environment or in
 `~/.ai-scratch/config` (absolute paths; `~/` expands).
+`WT_WORKSPACES` (default empty; environment, else the config) lists directory names directly
+under `WT_PRIMARIES` that are plain non-git workspace parents holding sibling primaries
+(`~/devel/portaj/app/app`, `~/devel/portaj/app/app-api`). `<repo>` resolves to
+`$WT_PRIMARIES/<repo>` when that is a git primary, else to the single
+`$WT_PRIMARIES/<ws>/<repo>` that is one; two matches are an error. After a primary moves, run
+`git worktree repair` in it, then `wt.sh relocate <repo> [--dry-run]`: it rewrites only the
+`primary` field of each record whose worktree really belongs to the resolved primary (or whose
+worktree is gone and whose stored primary is no longer a git work tree), and reports `updated`,
+`already-current` or `skipped: <reason>` per record. It runs no git command that changes a repository.
 Things to know: with `WT_OWNER` unset the owner is `user@host`, so two sessions
 look alike; `--owner` is the owner's statement, not a check, and `--pr` is informational
 (a merged PR's head ref is not preservation); `start` fetches from origin, which updates the primary's

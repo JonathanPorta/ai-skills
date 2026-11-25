@@ -62,10 +62,12 @@ class WtFixture(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def wt(self, *args: str, owner: str = "session-A"):
+    def wt(self, *args: str, owner: str = "session-A", **extra_env: str):
         env = dict(os.environ, AI_SCRATCH_CONFIG_DIR=str(self.cfg), WT_ROOT=str(self.wt_root),
                    WT_PRIMARIES=str(self.primaries), WT_OWNER=owner)
         env.pop("AI_SCRATCH_ROOT", None)
+        env.pop("WT_WORKSPACES", None)
+        env.update(extra_env)
         return subprocess.run(["bash", str(WT), *args], capture_output=True, text=True, env=env, timeout=60)
 
     def start(self, task: str = "task1", *extra: str, owner: str = "session-A"):
@@ -761,6 +763,182 @@ class TestListAndFinish(WtFixture):
                              capture_output=True, text=True, env=env, timeout=120).stdout
         self.assertRegex(out, r"FREE\s+done\b")
         self.assertRegex(out, r"KEEP\s+busy\s.*owner record not released")
+
+
+class TestWorkspaces(WtFixture):
+    """WT_WORKSPACES: primaries nested in plain parent directories, and `relocate`."""
+
+    def make_repo(self, path: Path) -> Path:
+        path.mkdir(parents=True)
+        git(path, "init", "-q")
+        # Explicit and portable: do not depend on init.defaultBranch (unset means master).
+        git(path, "symbolic-ref", "HEAD", "refs/heads/main")
+        git(path, "config", "user.email", "t@example.invalid")
+        git(path, "config", "user.name", "Test")
+        (path / "f").write_text("a\n")
+        git(path, "add", "f")
+        git(path, "commit", "-qm", "init")
+        return path
+
+    def move_into_workspace(self, ws: str = "demo") -> Path:
+        """Simulate the reorganisation: primaries/demo becomes primaries/<ws>/demo."""
+        stage = self.tmp / "stage"
+        shutil.move(str(self.primary), str(stage))
+        (self.primaries / ws).mkdir(exist_ok=True)
+        new = self.primaries / ws / "demo"
+        shutil.move(str(stage), str(new))
+        return new
+
+    def snapshot(self) -> dict:
+        return {p.name: p.read_text() for p in (self.owners / "demo").glob("*")}
+
+    def test_default_behaviour_is_unchanged_without_workspaces(self):
+        path, _ = self.start()
+        self.assertEqual(git(path, "rev-parse", "--git-common-dir"), str(Path(os.path.realpath(self.primary)) / ".git"))
+        r = self.wt("start", "nope", "t", "--no-fetch")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn(f"no primary checkout at {self.primaries}/nope", r.stderr)
+        # An unrelated WT_WORKSPACES entry does not change a plain primary.
+        (self.primaries / "ws").mkdir()
+        r = self.wt("start", "demo", "t2", "--no-fetch", WT_WORKSPACES="ws")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_a_nested_primary_is_found_through_workspaces(self):
+        self.make_repo(self.primaries / "ws" / "other")
+        r = self.wt("start", "other", "t", "--no-fetch")
+        self.assertNotEqual(r.returncode, 0)
+        r = self.wt("start", "other", "t", "--no-fetch", WT_WORKSPACES="ws")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('"primary": "%s"' % os.path.realpath(self.primaries / "ws" / "other"), (self.owners / "other" / "t.json").read_text())
+
+    def test_workspaces_come_from_the_config_file_when_the_environment_is_silent(self):
+        self.make_repo(self.primaries / "ws" / "other")
+        with (self.cfg / "config").open("a") as fh:
+            fh.write("WT_WORKSPACES = ws\n")
+        r = self.wt("start", "other", "t", "--no-fetch")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_a_plain_directory_with_a_nested_primary_of_the_same_name_resolves_to_the_nested_one(self):
+        new = self.move_into_workspace("demo")
+        self.assertFalse((self.primaries / "demo" / ".git").exists())
+        self.assertNotEqual(self.wt("start", "demo", "t", "--no-fetch").returncode, 0)
+        (self.primaries / "elsewhere").mkdir()
+        r = self.wt("start", "demo", "t", "--no-fetch", WT_WORKSPACES="elsewhere")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not a git working tree", r.stderr)
+        self.assertIn("WT_WORKSPACES", r.stderr)
+        r = self.wt("start", "demo", "t", "--no-fetch", WT_WORKSPACES="demo")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('"primary": "%s"' % os.path.realpath(new), self.record("t"))
+
+    def test_two_matching_workspaces_are_refused_by_name(self):
+        self.make_repo(self.primaries / "ws1" / "other")
+        self.make_repo(self.primaries / "ws2" / "other")
+        r = self.wt("start", "other", "t", "--no-fetch", WT_WORKSPACES="ws1 ws2")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("ambiguous", r.stderr)
+        self.assertIn("ws1/other", r.stderr)
+        self.assertIn("ws2/other", r.stderr)
+        self.assertFalse((self.owners / "other").exists() and any((self.owners / "other").iterdir()))
+
+    def test_a_direct_git_primary_wins_over_workspaces(self):
+        self.make_repo(self.primaries / "ws" / "demo")
+        r = self.wt("start", "demo", "t2", "--no-fetch", WT_WORKSPACES="ws")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('"primary": "%s"' % os.path.realpath(self.primary), self.record("t2"))
+
+    def test_bad_workspace_names_are_a_configuration_error(self):
+        for bad in ("a/b", "..", "-x", "a..b", "/abs"):
+            with self.subTest(bad=bad):
+                r = self.wt("list", WT_WORKSPACES=f"ok {bad}")
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("WT_WORKSPACES", r.stderr)
+
+    def test_start_fails_fast_when_the_primary_directory_is_not_a_git_tree(self):
+        (self.primaries / "plain").mkdir()
+        (self.primaries / "elsewhere").mkdir()
+        for env in ({}, {"WT_WORKSPACES": "elsewhere"}):
+            with self.subTest(env=env):
+                r = self.wt("start", "plain", "t", "--no-fetch", **env)
+                self.assertNotEqual(r.returncode, 0)
+                # (the test tree may sit inside an enclosing repository, which the unchanged
+                # default path reports as a linked worktree rather than "not a git working tree")
+                self.assertRegex(r.stderr, r"plain is (not a git working tree|itself a linked worktree)")
+                self.assertNotIn("worktree root", r.stderr)
+                self.assertFalse((self.wt_root / "plain" / "t").exists())
+                self.assertFalse((self.owners / "plain").exists() and any((self.owners / "plain").iterdir()))
+
+    def prepare_moved(self):
+        """Two tasks started before the move, the primary then moved and repaired."""
+        a, _ = self.start("t1")
+        b, _ = self.start("t2")
+        new = self.move_into_workspace("demo")
+        git(new, "worktree", "repair", str(a), str(b))
+        return a, b, new
+
+    def test_relocate_dry_run_writes_nothing(self):
+        self.prepare_moved()
+        before = self.snapshot()
+        r = self.wt("relocate", "demo", "--dry-run", WT_WORKSPACES="demo")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(re.findall(r": updated ", r.stdout)), 2, r.stdout)
+        self.assertIn("2 updated, 0 already-current, 0 skipped (dry run, nothing written)", r.stdout)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_relocate_rewrites_only_the_primary_and_fixes_the_repository_gate(self):
+        a, b, new = self.prepare_moved()
+        old_rec = self.record("t1")
+        r = self.wt("check", "demo", "t1", "--no-fetch", WT_WORKSPACES="demo")
+        self.assertIn("FAIL  repository: record names primary", r.stdout)
+        r = self.wt("relocate", "demo", WT_WORKSPACES="demo")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("2 updated, 0 already-current, 0 skipped", r.stdout)
+        new_rec = self.record("t1")
+        old_p, new_p = os.path.realpath(self.primaries / "demo"), os.path.realpath(new)
+        self.assertEqual(new_rec, old_rec.replace(f'"primary": "{old_p}"', f'"primary": "{new_p}"'))
+        self.assertIn(f'"primary": "{new_p}"', new_rec)
+        self.assertEqual(sorted(p.name for p in (self.owners / "demo").iterdir()), ["t1.json", "t2.json"])
+        r = self.wt("check", "demo", "t1", "--no-fetch", WT_WORKSPACES="demo")
+        self.assertNotIn("FAIL  repository", r.stdout)
+        self.assertIn(f"PASS  repository is {new_p}", r.stdout)
+        r = self.wt("relocate", "demo", WT_WORKSPACES="demo")
+        self.assertIn("0 updated, 2 already-current, 0 skipped", r.stdout)
+
+    def test_relocate_skips_a_record_whose_worktree_belongs_to_another_repo(self):
+        a, b, new = self.prepare_moved()
+        other = self.make_repo(self.primaries / "ws" / "other")
+        stray = self.tmp / "stray"
+        git(other, "worktree", "add", "-q", "-b", "stray", str(stray))
+        rec = self.owners / "demo" / "t2.json"
+        rec.write_text(rec.read_text().replace(f'"worktree": "{os.path.realpath(b)}"', f'"worktree": "{os.path.realpath(stray)}"'))
+        before = rec.read_text()
+        r = self.wt("relocate", "demo", WT_WORKSPACES="demo ws")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertRegex(r.stdout, r"demo/t2: skipped: .*belongs to .*ws/other")
+        self.assertIn("demo/t1: updated", r.stdout)
+        self.assertEqual(rec.read_text(), before)
+
+    def test_relocate_handles_a_missing_worktree_only_when_the_old_primary_is_gone(self):
+        a, b, new = self.prepare_moved()
+        git(new, "worktree", "remove", str(b))
+        r = self.wt("relocate", "demo", "--dry-run", WT_WORKSPACES="demo")
+        self.assertIn("demo/t2: updated", r.stdout)
+        # The stored primary is still a git work tree: leave the record and say why.
+        other = self.make_repo(self.primaries / "ws" / "other")
+        rec = self.owners / "demo" / "t2.json"
+        rec.write_text(rec.read_text().replace(f'"primary": "{os.path.realpath(self.primaries / "demo")}"', f'"primary": "{os.path.realpath(other)}"'))
+        r = self.wt("relocate", "demo", WT_WORKSPACES="demo")
+        self.assertRegex(r.stdout, r"demo/t2: skipped: .*still a git work tree")
+
+    def test_relocate_makes_no_repository_changes_and_rejects_bad_input(self):
+        a, b, new = self.prepare_moved()
+        refs = git(new, "for-each-ref")
+        wts = git(new, "worktree", "list", "--porcelain")
+        self.assertEqual(self.wt("relocate", "demo", WT_WORKSPACES="demo").returncode, 0)
+        self.assertEqual(git(new, "for-each-ref"), refs)
+        self.assertEqual(git(new, "worktree", "list", "--porcelain"), wts)
+        self.assertNotEqual(self.wt("relocate", "demo", "--bogus", WT_WORKSPACES="demo").returncode, 0)
+        self.assertNotEqual(self.wt("relocate", WT_WORKSPACES="demo").returncode, 0)
 
 
 if __name__ == "__main__":
