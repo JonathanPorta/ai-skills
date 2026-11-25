@@ -201,7 +201,7 @@ cmd_start() {
   name_ok "$task" || die "task must be a plain directory name (letters, digits, . _ -), got: $(scratch_display_name "$task")" 2
   scratch_text_is_sane "${purpose:-x}" || die "purpose contains control characters" 2
   local me; me="$(owner_id)"; scratch_text_is_sane "$me" || die "owner id contains control characters" 2
-  local primary; primary="$(primary_for "$repo")"
+  local primary; primary="$(primary_for "$repo")" || exit $?
   [ -e "$primary/.git/objects/info/alternates" ] && die "$primary borrows objects (objects/info/alternates); refusing to build task worktrees on a borrower"
 
   mkdir -p "$WT_ROOT/$repo" "$OWNERS_DIR/$repo" || die "cannot create $WT_ROOT/$repo"

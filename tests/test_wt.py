@@ -852,6 +852,20 @@ class TestWorkspaces(WtFixture):
                 self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
                 self.assertIn("WT_WORKSPACES", r.stderr)
 
+    def test_start_fails_fast_when_the_primary_directory_is_not_a_git_tree(self):
+        (self.primaries / "plain").mkdir()
+        (self.primaries / "elsewhere").mkdir()
+        for env in ({}, {"WT_WORKSPACES": "elsewhere"}):
+            with self.subTest(env=env):
+                r = self.wt("start", "plain", "t", "--no-fetch", **env)
+                self.assertNotEqual(r.returncode, 0)
+                # (the test tree may sit inside an enclosing repository, which the unchanged
+                # default path reports as a linked worktree rather than "not a git working tree")
+                self.assertRegex(r.stderr, r"plain is (not a git working tree|itself a linked worktree)")
+                self.assertNotIn("worktree root", r.stderr)
+                self.assertFalse((self.wt_root / "plain" / "t").exists())
+                self.assertFalse((self.owners / "plain").exists() and any((self.owners / "plain").iterdir()))
+
     def prepare_moved(self):
         """Two tasks started before the move, the primary then moved and repaired."""
         a, _ = self.start("t1")
