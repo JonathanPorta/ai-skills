@@ -5,6 +5,7 @@
 #   wt.sh list   [<repo>]
 #   wt.sh finish <repo> <task> [--pr URL] [--note TEXT] [--bundle FILE] [--release] [--owner ID] [--no-fetch]
 #   wt.sh check  <repo> <task> [--for-removal] [--no-fetch]
+#   wt.sh relocate <repo> [--dry-run]
 #
 # start   creates (or, for the same owner, resumes) ~/devel/worktrees/portaj/<repo>/<task>
 #         from the canonical primary ~/devel/portaj/<repo> without touching the branch
@@ -23,6 +24,22 @@
 #         branch's live tip, a merged PR's head ref, a stale remote-tracking ref
 #         or a note is not enough. --no-fetch assesses offline: only keep refs
 #         + bundle count. Preservation is not completion or owner release.
+#
+# relocate  after a primary moved (for example into a nested workspace, see
+#         WT_WORKSPACES below), rewrite ONLY the `primary` field of <repo>'s
+#         records to the currently resolved primary. A record is rewritten only
+#         when its worktree's real primary (git's common dir) is that primary,
+#         or, for a worktree already gone, when the stored primary path is no
+#         longer a git work tree. Prints updated / already-current / skipped:
+#         <reason> per record and a count. --dry-run writes nothing. It runs no
+#         git command that changes a repository (run `git worktree repair` first).
+#
+# Primaries: <repo> resolves to $WT_PRIMARIES/<repo>. Optional WT_WORKSPACES (environment,
+# else ~/.ai-scratch/config; default empty) is a whitespace-separated list of directory
+# names directly under WT_PRIMARIES that are plain, non-git workspace parents holding
+# sibling primaries. When $WT_PRIMARIES/<repo> is not a git primary, each
+# $WT_PRIMARIES/<ws>/<repo> is tried in order and the single git primary wins; two
+# matches are an error, never a guess.
 #
 # Ownership records are the flat JSON files scratch-sweep.sh consumes (see
 # scratch_owner_record_parse in lib-scratch.sh); there is one format, not two.
@@ -45,6 +62,7 @@ WT_ROOT="$(expand_dir "${WT_ROOT:-$(scratch_config_get WT_ROOT)}" "$HOME/devel/w
 WT_PRIMARIES="$(expand_dir "${WT_PRIMARIES:-$(scratch_config_get WT_PRIMARIES)}" "$HOME/devel/portaj" WT_PRIMARIES)" || exit 2
 WT_BRANCH_PREFIX="${WT_BRANCH_PREFIX:-$(scratch_config_get WT_BRANCH_PREFIX)}"; WT_BRANCH_PREFIX="${WT_BRANCH_PREFIX:-jp/f/}"
 WT_BUNDLES="$(expand_dir "${WT_BUNDLES:-$(scratch_config_get WT_BUNDLES)}" "$HOME/devel/recovery/bundles" WT_BUNDLES)" || exit 2
+WT_WORKSPACES="${WT_WORKSPACES:-$(scratch_config_get WT_WORKSPACES)}"
 OWNERS_DIR="$(scratch_owners_dir)"
 
 # Source worktrees never belong under a temp directory (the OS purges it) or beside or inside the
@@ -82,6 +100,16 @@ name_ok() {  # plain directory name: no separators, no dot-dirs, no leading dash
   case "$1" in ''|.*|-*|*/*|*\\*|*' '*) return 1;; esac
   printf '%s' "$1" | LC_ALL=C grep -qE '^[A-Za-z0-9._-]+$'
 }
+# WT_WORKSPACES names are plain directory names directly under WT_PRIMARIES; anything else is a
+# configuration error (reported before any command runs).
+if [ -n "$WT_WORKSPACES" ]; then
+  set -f
+  for _ws in $WT_WORKSPACES; do
+    case "$_ws" in */*|*..*|-*) printf 'wt: WT_WORKSPACES entry "%s" must be a plain directory name directly under WT_PRIMARIES (no "/", no "..", no leading "-")\n' "$_ws" >&2; exit 2;; esac
+    name_ok "$_ws" || { printf 'wt: WT_WORKSPACES entry "%s" must be a plain directory name (letters, digits, . _ -)\n' "$_ws" >&2; exit 2; }
+  done
+  set +f; unset _ws
+fi
 now() { date +%Y-%m-%dT%H:%M:%S%z; }
 owner_id() { printf '%s' "${OWNER_OPT:-${WT_OWNER:-$(id -un)@$(hostname -s 2>/dev/null || hostname)}}"; }
 
@@ -125,8 +153,31 @@ load_record() {  # <repo> <task>; sets REC, REC_STATUS, REC_WT, REC_OWNER
   return 0
 }
 
+is_git_top() {  # <dir>: the directory is itself the top of a git work tree (not merely inside one)
+  [ -d "$1" ] || return 1
+  local top; top="$(g -C "$1" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [ "$(scratch_canonical "$top" 2>/dev/null)" = "$(scratch_canonical "$1" 2>/dev/null)" ]
+}
+
 primary_for() {  # <repo> -> canonical primary path on stdout
-  local p; p="$(scratch_canonical "$WT_PRIMARIES/$1" 2>/dev/null)" || die "no primary checkout at $WT_PRIMARIES/$1"
+  local p
+  if [ -z "$WT_WORKSPACES" ] || is_git_top "$WT_PRIMARIES/$1"; then
+    p="$(scratch_canonical "$WT_PRIMARIES/$1" 2>/dev/null)" || die "no primary checkout at $WT_PRIMARIES/$1"
+  else
+    local ws cand found="" n=0
+    set -f
+    for ws in $WT_WORKSPACES; do
+      cand="$WT_PRIMARIES/$ws/$1"
+      if is_git_top "$cand"; then n=$((n + 1)); found="$found${found:+ and }$cand"; p="$cand"; fi
+    done
+    set +f
+    [ "$n" -le 1 ] || die "$1 is ambiguous: git primaries at both $found; refusing to guess (fix WT_WORKSPACES or the layout)"
+    if [ "$n" = 0 ]; then
+      if [ -e "$WT_PRIMARIES/$1" ]; then die "$WT_PRIMARIES/$1 is not a git working tree and no workspace in WT_WORKSPACES ($WT_WORKSPACES) holds a git primary named $1; if it is a workspace parent, nested primaries are found through WT_WORKSPACES"; fi
+      die "no primary checkout at $WT_PRIMARIES/$1 or in any WT_WORKSPACES workspace ($WT_WORKSPACES)"
+    fi
+    p="$(scratch_canonical "$p" 2>/dev/null)" || die "cannot resolve primary $p"
+  fi
   g -C "$p" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "$p is not a git working tree"
   [ "$(g -C "$p" rev-parse --git-common-dir 2>/dev/null)" = ".git" ] || [ "$(g -C "$p" rev-parse --git-common-dir 2>/dev/null)" = "$p/.git" ] \
     || die "$p is itself a linked worktree, not a primary"
@@ -385,6 +436,19 @@ primary_of() {  # <wt> <recorded-primary>
   PRIMARY_WHY="record names primary $rec but the worktree belongs to $PRIMARY_REAL"; return 1
 }
 
+# Alternates files (primaries, workspace primaries, task worktrees) that borrow <wt>'s objects.
+lends_objects() {  # <wt>
+  local wt="$1" ws
+  LC_ALL=C grep -lsxF -e "$wt/.git/objects" -e "$wt/.git/objects/" "$WT_PRIMARIES"/*/.git/objects/info/alternates "$WT_ROOT"/*/*/.git/objects/info/alternates 2>/dev/null
+  set -f
+  for ws in $WT_WORKSPACES; do
+    set +f
+    LC_ALL=C grep -lsxF -e "$wt/.git/objects" -e "$wt/.git/objects/" "$WT_PRIMARIES/$ws"/*/.git/objects/info/alternates 2>/dev/null
+    set -f
+  done
+  set +f
+}
+
 # One gate list for finish --release and check: every line is PASS/FAIL,
 # written to $WT_TMP/gates (not stdout: the caller needs the ASSESS_* and
 # PRIMARY_REAL variables, which a command substitution would lose). Sets
@@ -403,7 +467,7 @@ run_gates() {  # <wt> <recorded-primary> <bundle> <rec-sha> <fetch> <for-removal
   g -C "$wt" status --porcelain >/dev/null 2>&1 || dirty="?"
   gate "$([ "$dirty" = 0 ] && echo 0 || echo 1)" "clean working tree and index ($dirty change(s))"
   gate "$([ ! -d "$wt/.git/worktrees" ] && echo 0 || echo 1)" "hosts no worktrees"
-  gate "$([ -z "$(LC_ALL=C grep -lsxF -e "$wt/.git/objects" -e "$wt/.git/objects/" "$WT_PRIMARIES"/*/.git/objects/info/alternates "$WT_ROOT"/*/*/.git/objects/info/alternates 2>/dev/null)" ] && echo 0 || echo 1)" "lends no objects"
+  gate "$([ -z "$(lends_objects "$wt")" ] && echo 0 || echo 1)" "lends no objects"
   gate "$([ -z "$(find "$wt" -mindepth 2 -name .git -not -path "$wt/.git/*" 2>/dev/null | head -1)" ] && echo 0 || echo 1)" "no nested repository"
   if assess_preservation "$wt" "$PRIMARY_REAL" "$bundle" "$rec_sha" "$fetch"; then
     gate "$([ -z "$ASSESS_UNPRESERVED" ] && echo 0 || echo 1)" "history preserved (${ASSESS_BASIS:-no basis}${ASSESS_UNPRESERVED:+; UNPRESERVED: $ASSESS_UNPRESERVED}${ASSESS_NOTE:+; $ASSESS_NOTE})"
@@ -567,6 +631,53 @@ cmd_finish() {
   printf '# the branch %s and any refs/keep/* stay in the primary; the record stays as history.\n' "$(shq "$branch")"
 }
 
+# Rewrite only the `primary` field of <repo>'s ownership records after the primary moved.
+# Reuses update_record (dump + override + write_record: temp file beside the record, validated,
+# then renamed). Runs no git command that changes a repository.
+cmd_relocate() {
+  local repo="${1:-}" dry=0; shift 1 2>/dev/null || usage
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry=1; shift;;
+      *) die "unknown option: $1" 2;;
+    esac
+  done
+  name_ok "$repo" || die "repo must be a plain directory name, got: $(scratch_display_name "$repo")" 2
+  local current; current="$(primary_for "$repo")" || exit $?
+  local f task stored="" stored_real="" n_up=0 n_cur=0 n_skip=0 reason="" verb
+  verb="updated"
+  for f in "$OWNERS_DIR/$repo"/*.json; do
+    [ -f "$f" ] || continue
+    task="$(basename "$f" .json)"
+    load_record "$repo" "$task" || continue
+    reason=""; stored=""
+    if [ "$REC_STATUS" = malformed ]; then
+      reason="record is malformed"
+    else
+      stored="$(scratch_owner_record_get "$f" primary)"
+      stored_real="$(scratch_canonical "$stored" 2>/dev/null)" || stored_real="$stored"
+      if [ -n "$stored" ] && [ "$stored_real" = "$current" ]; then
+        printf '%s/%s: already-current\n' "$repo" "$task"; n_cur=$((n_cur + 1)); continue
+      fi
+      if [ -d "$REC_WT" ]; then
+        if ! primary_of "$REC_WT" ""; then reason="$PRIMARY_WHY (run git worktree repair in the primary first)"
+        elif [ "$PRIMARY_REAL" != "$current" ]; then reason="worktree $REC_WT belongs to $PRIMARY_REAL, not $current"
+        fi
+      elif [ -n "$stored" ] && is_git_top "$stored"; then
+        reason="worktree directory is missing but the stored primary $stored is still a git work tree"
+      fi
+    fi
+    if [ -n "$reason" ]; then
+      printf '%s/%s: skipped: %s\n' "$repo" "$task" "$reason"; n_skip=$((n_skip + 1)); continue
+    fi
+    if [ "$dry" = 0 ]; then
+      printf 'primary\tstring\t%s\n' "$current" >"$WT_TMP/ov"; update_record "$f" "$WT_TMP/ov"
+    fi
+    printf '%s/%s: %s (%s -> %s)\n' "$repo" "$task" "$verb" "${stored:-none}" "$current"; n_up=$((n_up + 1))
+  done
+  printf '%s: %s updated, %s already-current, %s skipped%s\n' "$repo" "$n_up" "$n_cur" "$n_skip" "$([ "$dry" = 1 ] && printf ' (dry run, nothing written)')"
+}
+
 # Single-quote a value for a shell plan.
 shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
@@ -579,6 +690,7 @@ case "$cmd" in
   list)   cmd_list "$@";;
   finish) cmd_finish "$@";;
   check)  cmd_check "$@";;
+  relocate) cmd_relocate "$@";;
   -h|--help|help|'') usage 0;;
   *) die "unknown command: $cmd" 2;;
 esac

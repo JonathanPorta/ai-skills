@@ -20,9 +20,12 @@ boring.
   asks before writing anything.
 - `scripts/scratch-sweep.sh` — reports reclaimable entries; deletes only with
   `--apply`.
-- `scripts/wt.sh` — `start` / `list` / `finish` for agent task worktrees under
+- `scripts/wt.sh` — `start` / `list` / `finish` / `check` / `relocate` for agent task worktrees under
   `~/devel/worktrees/portaj/<repo>/<task>`; writes the ownership records the
-  sweep consumes and never deletes anything.
+  sweep consumes and never deletes anything. Primaries are `$WT_PRIMARIES/<repo>`,
+  or, for names listed in the optional `WT_WORKSPACES` (plain non-git parent
+  directories under `WT_PRIMARIES`), `$WT_PRIMARIES/<ws>/<repo>`; `relocate <repo>
+  [--dry-run]` rewrites the records' `primary` field after a primary moves.
 
 ## Configuration
 
